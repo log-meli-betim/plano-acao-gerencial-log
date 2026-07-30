@@ -4,106 +4,83 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Dash Board — Plano de Ação Gerencial</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Firebase Realtime Database (mesmo padrão do sistema de limpeza) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <script>
-// ── Firebase REST API (works from file://, no SDK needed) ─────────────────
-const FB_PROJECT = 'planolog-6f9fd';
-const FB_KEY     = 'AIzaSyAJIpVZFnXKK_TaxNPdhYoCtzGGj4E5s2k';
-const FB_BASE    = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents`;
-const COL        = 'acoes';
+const firebaseConfig = {
+  apiKey:            "AIzaSyAJIpVZFnXKK_TaxNPdhYoCtzGGj4E5s2k",
+  authDomain:        "planolog-6f9fd.firebaseapp.com",
+  databaseURL:       "https://planolog-6f9fd-default-rtdb.firebaseio.com",
+  projectId:         "planolog-6f9fd",
+  storageBucket:     "planolog-6f9fd.firebasestorage.app",
+  messagingSenderId: "775443689290",
+  appId:             "1:775443689290:web:e7830e93e0eadaacd01bb3"
+};
+firebase.initializeApp(firebaseConfig);
+const fbRoot = firebase.database().ref('acoes');
 
-// Convert JS object → Firestore REST document fields
-function toFields(d){
-  const f = {};
-  const str = v => ({stringValue: String(v||'')});
-  const num = v => ({integerValue: String(Number(v)||0)});
-  f.resp     = str(d.resp);
-  f.area     = str(d.area);
-  f.tipo     = str(d.tipo);
-  f.crit     = str(d.crit);
-  f.status   = str(d.status);
-  f.prazo    = str(d.prazo);
-  f.abertura = str(d.abertura);
-  f.concl    = str(d.concl);
-  f.desc     = str(d.desc);
-  f.acao     = str(d.acao);
-  f.obs      = str(d.obs);
-  f.replan   = str(JSON.stringify(d.replan||[]));
-  f.ordem    = num(d.ordem || d.id || 0);
-  return { fields: f };
-}
-
-// Convert Firestore REST document → JS object
-function fromFields(doc){
-  const f = doc.fields || {};
-  const s = k => (f[k]&&f[k].stringValue) || '';
-  const n = k => parseInt((f[k]&&(f[k].integerValue||f[k].doubleValue)) || 0);
-  const _ref = doc.name ? doc.name.split('/').pop() : '';
+// ── Realtime Database helpers ─────────────────────────────
+function toRec(d){
   return {
-    _ref,
-    id:       n('ordem'),
-    resp:     s('resp'),
-    area:     s('area'),
-    tipo:     s('tipo'),
-    crit:     s('crit'),
-    status:   s('status'),
-    prazo:    s('prazo'),
-    abertura: s('abertura'),
-    concl:    s('concl'),
-    desc:     s('desc'),
-    acao:     s('acao'),
-    obs:      s('obs'),
-    replan:   (() => { try{ return JSON.parse(s('replan')||'[]'); }catch(e){ return []; } })()
+    id:       d.id       || 0,
+    resp:     d.resp     || '',
+    area:     d.area     || '',
+    tipo:     d.tipo     || '',
+    crit:     d.crit     || '',
+    status:   d.status   || '',
+    prazo:    d.prazo    || '',
+    abertura: d.abertura || '',
+    concl:    d.concl    || '',
+    desc:     d.desc     || '',
+    acao:     d.acao     || '',
+    obs:      d.obs      || '',
+    replan:   JSON.stringify(d.replan || [])
+  };
+}
+function fromRec(key, val){
+  return {
+    _ref:     key,
+    id:       val.id       || 0,
+    resp:     val.resp     || '',
+    area:     val.area     || '',
+    tipo:     val.tipo     || '',
+    crit:     val.crit     || '',
+    status:   val.status   || '',
+    prazo:    val.prazo    || '',
+    abertura: val.abertura || '',
+    concl:    val.concl    || '',
+    desc:     val.desc     || '',
+    acao:     val.acao     || '',
+    obs:      val.obs      || '',
+    replan:   (() => { try{ return JSON.parse(val.replan||'[]'); }catch(e){ return []; } })()
   };
 }
 
 async function fbLoad(){
-  const url = `${FB_BASE}/${COL}?key=${FB_KEY}&orderBy=ordem&pageSize=500`;
-  const r = await fetch(url);
-  if(!r.ok) throw new Error('Firestore GET ' + r.status + ': ' + await r.text());
-  const data = await r.json();
-  if(!data.documents) return [];
-  return data.documents
-    .map(fromFields)
-    .sort((a,b) => a.id - b.id);
+  const snap = await fbRoot.orderByChild('id').once('value');
+  const rows = [];
+  snap.forEach(child => { rows.push(fromRec(child.key, child.val())); });
+  return rows.sort((a,b) => a.id - b.id);
 }
-
 async function fbAdd(d){
-  const url = `${FB_BASE}/${COL}?key=${FB_KEY}`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(toFields(d))
-  });
-  if(!r.ok) throw new Error('Firestore POST ' + r.status + ': ' + await r.text());
-  const doc = await r.json();
-  return { ...d, _ref: doc.name.split('/').pop() };
+  const ref = fbRoot.push();
+  await ref.set(toRec(d));
+  return { ...d, _ref: ref.key };
 }
-
 async function fbUpdate(d){
-  if(!d._ref){ console.warn('fbUpdate: no _ref', d.id); return d; }
-  // Build update mask from all fields
-  const fields = ['resp','area','tipo','crit','status','prazo','abertura','concl','desc','acao','obs','replan','ordem'];
-  const mask = fields.map(f=>`updateMask.fieldPaths=${f}`).join('&');
-  const url = `${FB_BASE}/${COL}/${d._ref}?key=${FB_KEY}&${mask}`;
-  const r = await fetch(url, {
-    method: 'PATCH',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(toFields(d))
-  });
-  if(!r.ok) throw new Error('Firestore PATCH ' + r.status + ': ' + await r.text());
+  if(!d._ref) return d;
+  await fbRoot.child(d._ref).set(toRec(d));
   return d;
 }
-
 async function fbDel(d){
   if(!d._ref) return;
-  const url = `${FB_BASE}/${COL}/${d._ref}?key=${FB_KEY}`;
-  const r = await fetch(url, { method: 'DELETE' });
-  if(!r.ok) throw new Error('Firestore DELETE ' + r.status);
+  await fbRoot.child(d._ref).remove();
 }
 </script>
+
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* system fonts only */
 :root{
   --navy:#0F2744;--blue:#1557A0;--sky:#2E86D4;--teal:#0E9F8E;
   --green:#1EB564;--yellow:#F5A623;--orange:#E8632A;--red:#D93535;
@@ -111,7 +88,7 @@ async function fbDel(d){
   --txt:#1A2B45;--muted:#7A90B0;--sidebar:#0F2744;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--txt);font-size:13px;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:13px;}
 .layout{display:flex;height:100vh;overflow:hidden;}
 
 /* SIDEBAR */
@@ -167,14 +144,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--txt);font-s
 /* ROW2/ROW3 */
 .row2{display:grid;grid-template-columns:240px 1fr 1fr;gap:14px;}
 .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
-.donut-wrap{position:relative;width:148px;height:148px;margin:0 auto;}
-.donut-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;}
-.donut-center .big{font-size:30px;font-weight:800;color:var(--navy);}
-.donut-center .sm{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;}
-.legend{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
-.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;}
-.legend-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
-.legend-pct{margin-left:auto;font-weight:700;}
+/* donut css removed */
+/* legend css removed */
 .pbar-row{display:flex;flex-direction:column;gap:9px;}
 .pbar-info{display:flex;justify-content:space-between;margin-bottom:3px;}
 .pbar-name{font-size:11px;font-weight:600;}.pbar-val{font-size:11px;font-weight:700;}
@@ -270,6 +241,22 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
 
 ::-webkit-scrollbar{width:5px;height:5px;}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px;}
+
+/* Pure CSS Charts (no external dependency) */
+.css-chart { width:100%; height:100%; display:flex; flex-direction:column; justify-content:flex-end; gap:4px; padding:8px 4px 0; }
+.css-bar-row { display:flex; align-items:center; gap:8px; font-size:10px; }
+.css-bar-label { width:90px; text-align:right; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.css-bar-track { flex:1; background:#EEF1F7; border-radius:4px; height:16px; overflow:hidden; }
+.css-bar-fill { height:100%; border-radius:4px; transition:width .4s ease; display:flex; align-items:center; justify-content:flex-end; padding-right:5px; }
+.css-bar-val { font-size:10px; font-weight:700; color:#fff; }
+.css-donut-wrap { display:flex; flex-direction:column; gap:6px; padding:8px; }
+.css-donut-row { display:flex; align-items:center; gap:8px; }
+.css-donut-dot { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+.css-donut-label { font-size:11px; color:var(--txt); flex:1; }
+.css-donut-bar { width:100px; height:8px; background:#EEF1F7; border-radius:4px; overflow:hidden; }
+.css-donut-fill { height:100%; border-radius:4px; }
+.css-donut-pct { font-size:11px; font-weight:700; min-width:35px; text-align:right; }
+
 </style>
 </head>
 <body>
@@ -330,14 +317,14 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         </div>
         <div class="form-group">
           <label class="form-label">Status <span class="req">*</span></label>
-          <select class="form-select" id="f-status" onchange="onStatusChange()">
+          <select class="form-select" id="f-status">
             <option value="">Selecione…</option>
             <option>Não iniciado</option><option>Em andamento</option><option>Concluído</option><option>Descontinuado</option>
           </select>
         </div>
         <div class="form-group">
           <label class="form-label">Data Prevista (Prazo) <span class="req">*</span></label>
-          <input class="form-input" id="f-prazo" type="date" onchange="onPrazoChange()"/>
+          <input class="form-input" id="f-prazo" type="date"/>
         </div>
         <div class="form-group">
           <label class="form-label">Data de Abertura</label>
@@ -345,7 +332,7 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         </div>
         <div class="form-group" id="grp-concl">
           <label class="form-label">Data de Conclusão <span id="concl-req" style="display:none" class="req">*</span></label>
-          <input class="form-input" id="f-concl" type="date" onchange="onConclChange()"/>
+          <input class="form-input" id="f-concl" type="date"/>
         </div>
         <div class="form-group span2" id="grp-replan" style="display:none">
           <label class="form-label">Motivo do Replanejamento <span class="req">*</span></label>
@@ -552,16 +539,13 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         <div class="card">
           <div class="card-header"><span class="card-title">Status Geral das Ações</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;align-items:center">
-            <div class="donut-wrap"><canvas id="donutChart"></canvas>
-              <div class="donut-center"><div class="big" id="donut-center-val">—</div><div class="sm">TOTAL</div></div>
-            </div>
-            <div class="legend" style="width:100%">
-              <div class="legend-item"><div class="legend-dot" style="background:#1EB564"></div>Concluído<span class="legend-pct" style="color:#1EB564" id="leg-concl"></span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#F5A623"></div>Em andamento<span class="legend-pct" style="color:#F5A623" id="leg-and"></span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#D93535"></div>Atrasado<span class="legend-pct" style="color:#D93535" id="leg-atr"></span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#AAB8CC"></div>Não iniciado<span class="legend-pct" style="color:#AAB8CC" id="leg-naoinic"></span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#6C4DE8"></div>Descontinuado<span class="legend-pct" style="color:#6C4DE8" id="leg-disc"></span></div>
-            </div>
+            <div id="donutChart" style="width:100%"></div>
+            <div id="donut-center-val" style="display:none"></div>
+            <div id="leg-concl" style="display:none"></div>
+            <div id="leg-and" style="display:none"></div>
+            <div id="leg-atr" style="display:none"></div>
+            <div id="leg-naoinic" style="display:none"></div>
+            <div id="leg-disc" style="display:none"></div>
           </div>
         </div>
         <div class="card">
@@ -570,7 +554,7 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         </div>
         <div class="card">
           <div class="card-header"><span class="card-title">Chamados por Criticidade</span></div>
-          <div class="chart-box"><canvas id="critChart"></canvas></div>
+          <div class="chart-box"><div id="critChart" class="css-chart"></div></div>
         </div>
       </div>
       <div class="row3">
@@ -580,11 +564,11 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         </div>
         <div class="card">
           <div class="card-header"><span class="card-title">Chamados por Tipo</span></div>
-          <div class="chart-box-tall"><canvas id="tipoChart"></canvas></div>
+          <div class="chart-box-tall"><div id="tipoChart" class="css-chart"></div></div>
         </div>
         <div class="card">
           <div class="card-header"><span class="card-title">Criticidade × Status</span></div>
-          <div class="chart-box-tall"><canvas id="stackedChart"></canvas></div>
+          <div class="chart-box-tall"><div id="stackedChart" class="css-chart"></div></div>
         </div>
       </div>
 
@@ -592,7 +576,7 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         <div class="card">
           <div class="card-header"><span class="card-title">Concluídas — Pontualidade</span></div>
-          <div class="chart-box-tall"><canvas id="pontChart"></canvas></div>
+          <div class="chart-box-tall"><div id="pontChart" class="css-chart"></div></div>
         </div>
         <div class="card">
           <div class="card-header" style="padding-bottom:10px">
@@ -639,7 +623,7 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         <div class="table-toolbar">
           <div class="search-box">
             <span style="color:var(--muted)">🔍</span>
-            <input type="text" id="search-concl" placeholder="Buscar por descrição, responsável, área…" oninput="renderConcluidos()"/>
+            <input type="text" id="search-concl" placeholder="Buscar por descrição, responsável, área…"/>
           </div>
           <span style="font-size:13px;font-weight:700;color:var(--green)">✅ Chamados Concluídos</span>
           <span class="tbl-count" id="concl-count"></span>
@@ -672,7 +656,7 @@ table.data-tbl td{padding:9px 10px;vertical-align:top;}
         <div class="table-toolbar">
           <div class="search-box">
             <span style="color:var(--muted)">🔍</span>
-            <input type="text" id="search-input" placeholder="Buscar por descrição, responsável, área…" oninput="renderTodos()"/>
+            <input type="text" id="search-input" placeholder="Buscar por descrição, responsável, área…"/>
           </div>
           <button class="btn-primary" onclick="openNew()">＋ Nova Ação</button>
           <span class="tbl-count" id="todos-count"></span>
@@ -738,34 +722,18 @@ const SEED = [
   {id:25,resp:"Diego",area:"Segurança/Incêndio",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Trocar válvula registro globo de incêndio danificado próximo ao RK.",acao:"3 orçamentos: Luz Service, Fire Force e ProgeIncêndio. Menor valor: Fire Force. Enviado à Natalia em 24/07 para aprovação.",obs:"",replan:[]},
 ];
 
-// ═══════════════════════════════════════════════════════
-// DB STATE
-// ═══════════════════════════════════════════════════════
 let DB = [];
 
-function freshSeed(){
-  return SEED.map(d => ({replan:[], obs:'', concl:'', abertura:'', ...d}));
-}
-function saveData(){} // no-op — all saves go through Firebase directly
-
-// ── Load from Firestore ───────────────────────────────
 async function loadFromDB(){
-  // Show data immediately from SEED while Firebase loads
+  // Show SEED data immediately so screen is never empty
   DB = freshSeed();
   renderAll();
   setLoading(true);
-
-  // Race Firebase against a 10s timeout
-  const timeout = new Promise((_,reject) =>
-    setTimeout(() => reject(new Error('Timeout — verifique as regras do Firestore')), 10000)
-  );
-
   try {
-    const rows = await Promise.race([fbLoad(), timeout]);
-
+    const rows = await fbLoad();
     if(rows.length === 0){
       // First run — write SEED to Firestore
-      showToast('Primeiro acesso: gravando dados no Firebase…', '#2E86D4');
+      showToast('Primeiro acesso: gravando dados no Firebase…','#2E86D4');
       DB = [];
       let ordem = 1;
       for(const d of SEED){
@@ -773,15 +741,15 @@ async function loadFromDB(){
         DB.push({...d, ...rec, id:ordem});
         ordem++;
       }
-      showToast('✓ ' + DB.length + ' registros gravados no Firebase!', '#1EB564');
+      showToast('✓ '+DB.length+' registros gravados no Firebase!','#1EB564');
     } else {
       DB = rows;
-      showToast('✓ ' + DB.length + ' registros carregados do Firebase', '#1EB564');
+      showToast('✓ '+DB.length+' registros carregados do Firebase','#1EB564');
     }
     renderAll();
   } catch(e){
     console.error('Firebase error:', e);
-    showToast('⚠️ Firebase: ' + e.message + ' — usando dados locais', '#E8632A');
+    showToast('⚠️ Firebase: '+e.message+' — usando dados locais','#E8632A');
     DB = freshSeed();
     renderAll();
   } finally {
@@ -789,110 +757,12 @@ async function loadFromDB(){
   }
 }
 
-// ── Loading overlay ───────────────────────────────────
-function setLoading(on){
-  let el = document.getElementById('loading-overlay');
-  if(!el){
-    el = document.createElement('div');
-    el.id = 'loading-overlay';
-    el.style.cssText = 'position:fixed;inset:0;background:rgba(15,39,68,.65);z-index:9000;display:flex;align-items:center;justify-content:center;';
-    el.innerHTML = '<div style="background:#fff;border-radius:14px;padding:24px 36px;font-family:Inter,sans-serif;font-size:14px;font-weight:600;color:#0F2744;display:flex;align-items:center;gap:12px"><span style="font-size:22px">⏳</span> Sincronizando com o banco…</div>';
-    document.body.appendChild(el);
-  }
-  el.style.display = on ? 'flex' : 'none';
-}
-
-// ── Export backup ─────────────────────────────────────
-function exportData(){
-  const json = JSON.stringify(DB, null, 2);
-  const blob = new Blob([json], {type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'plano_acao_backup.json';
-  a.click();
-  showToast('Backup exportado ✓');
-}
-
-// ── Import backup ─────────────────────────────────────
-function importData(){
-  const input = document.createElement('input');
-  input.type = 'file'; input.accept = '.json';
-  input.onchange = e => {
-    const file = e.target.files[0]; if(!file) return;
-    const reader = new FileReader();
-    reader.onload = async ev => {
-      try {
-        const parsed = JSON.parse(ev.target.result);
-        if(!Array.isArray(parsed)) throw new Error('formato inválido');
-        if(!confirm('Importar ' + parsed.length + ' registros? Isso substituirá TODOS os dados atuais.')) return;
-        setLoading(true);
-        for(const d of DB) await fbDel(d);
-        DB = [];
-        let ordem = 1;
-        for(const d of parsed){
-          const rec = await fbAdd({...d, ordem, _ref:undefined});
-          DB.push({...d, ...rec, id:ordem});
-          ordem++;
-        }
-        renderAll();
-        showToast('Importados ' + DB.length + ' registros ✓', '#1EB564');
-      } catch(err){ showToast('⚠️ Erro: ' + err.message, '#D93535'); }
-      finally{ setLoading(false); }
-    };
-    reader.readAsText(file);
-  };
-  input.click();
-}
-
-// ── Reset to seed ─────────────────────────────────────
-function resetData(){
-  if(!confirm('Restaurar dados originais? Isso apagará TODOS os dados atuais no banco.')) return;
-  (async()=>{
-    setLoading(true);
-    try {
-      for(const d of DB) await fbDel(d);
-      DB = [];
-      let ordem = 1;
-      for(const d of SEED){
-        const rec = await fbAdd({...d, ordem, replan:[]});
-        DB.push({...d, ...rec, id:ordem});
-        ordem++;
-      }
-      renderAll(); showToast('Banco restaurado ✓');
-    } catch(e){ showToast('Erro: ' + e.message, '#D93535'); }
-    finally{ setLoading(false); }
-  })();
-}
-
-// ── Load from Supabase (called on init and after changes) ─
-async function loadFromDB(){
-  setLoading(true);
-  try{
-    const rows = await sbGet();
-    DB = rows.map(fromRow);
-    if(DB.length === 0){
-      // First run — seed the database
-      showToast('Primeiro acesso: carregando dados iniciais…','#2E86D4');
-      for(const d of SEED){
-        const inserted = await sbInsert(d);
-        DB.push(inserted);
-      }
-      showToast('Banco inicializado com '+DB.length+' registros ✓','#1EB564');
-    }
-    renderAll();
-  } catch(e){
-    showToast('⚠️ Erro ao conectar: '+e.message,'#D93535');
-    DB = freshSeed();
-    renderAll();
-  } finally { setLoading(false); }
-}
-
 function freshSeed(){
   return SEED.map(d=>({replan:[],obs:'',concl:'',abertura:'',...d}));
 }
 
 // saveData is now async — callers that need it use await saveRecord()
-function saveData(){} // kept for compatibility, actual saves use sbUpdate/sbInsert
+function saveData(){} // no-op — saves go through Firebase directly
 
 // ── Loading overlay ─────────────────────────────────────
 function setLoading(on){
@@ -910,9 +780,12 @@ function setLoading(on){
 // ── Export / Import (backup) ─────────────────────────────
 function exportData(){
   const json = JSON.stringify(DB, null, 2);
-  const blob = new Blob([json], {type:'application/json'});
-  const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download='plano_acao_backup.json'; a.click();
+  const a = document.createElement('a');
+  a.href = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
+  a.download = 'plano_acao_backup.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
   showToast('Backup exportado ✓');
 }
 function importData(){
@@ -927,12 +800,13 @@ function importData(){
         if(!Array.isArray(parsed)) throw new Error();
         if(!confirm('Importar '+parsed.length+' registros? Isso substituirá todos os dados no banco.')) return;
         setLoading(true);
-        // Delete all existing rows then re-insert
-        for(const d of DB) await sbDelete(d.id);
+        for(const d of DB) await fbDel(d);
         DB=[];
+        let ordem=1;
         for(const d of parsed){
-          const ins=await sbInsert({...d,id:undefined});
-          DB.push(ins);
+          const rec=await fbAdd({...d, ordem, _ref:undefined});
+          DB.push({...d,...rec,id:ordem});
+          ordem++;
         }
         renderAll(); showToast('Importados '+DB.length+' registros ✓','#1EB564');
       } catch(err){ showToast('⚠️ Erro na importação: '+err.message,'#D93535'); }
@@ -947,9 +821,10 @@ function resetData(){
     (async()=>{
       setLoading(true);
       try{
-        for(const d of DB) await sbDelete(d.id);
+        for(const d of DB) await fbDel(d);
         DB=[];
-        for(const d of SEED){ const ins=await sbInsert(d); DB.push(ins); }
+        let ordem=1;
+        for(const d of SEED){ const rec=await fbAdd({...d,ordem,replan:[]}); DB.push({...d,...rec,id:ordem}); ordem++; }
         renderAll(); showToast('Banco restaurado ✓');
       } catch(e){ showToast('Erro: '+e.message,'#D93535'); }
       finally{ setLoading(false); }
@@ -1074,7 +949,7 @@ function showDiag(){
 function showToast(msg,col='#1EB564'){
   const t=document.getElementById('toast');
   t.textContent=msg;t.style.background=col;
-  t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);
+  t.classList.add('show');window.setTimeout(()=>t.classList.remove('show'),3000);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1085,7 +960,21 @@ function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open');}));
 
 // Event delegation for dynamically generated table buttons (data-action)
-document.addEventListener('click', function(e){
+// Input event listeners (replacing inline onchange/oninput)
+document.addEventListener('DOMContentLoaded', ()=>{
+  const fs = document.getElementById('f-status');
+  const fp = document.getElementById('f-prazo');
+  const fc = document.getElementById('f-concl');
+  const sc = document.getElementById('search-concl');
+  const st = document.getElementById('search-input');
+  if(fs) fs.addEventListener('change', onStatusChange);
+  if(fp) fp.addEventListener('change', onPrazoChange);
+  if(fc) fc.addEventListener('change', onConclChange);
+  if(sc) sc.addEventListener('input', renderConcluidos);
+  if(st) st.addEventListener('input', renderTodos);
+});
+
+document.addEventListener('click',(e)=>{
   const btn = e.target.closest('[data-action]');
   if(!btn) return;
   const action = btn.getAttribute('data-action');
@@ -1182,7 +1071,7 @@ function onConclChange(){
     // Flash the select green to show it changed
     fs.style.borderColor='#1EB564';
     fs.style.background='#E8F7EF';
-    setTimeout(()=>{fs.style.borderColor='';fs.style.background='';},1800);
+    window.setTimeout(()=>{fs.style.borderColor='';fs.style.background='';},1800);
     onStatusChange();
   }
   if(!fc.value && fs.value==='Concluído'){
@@ -1377,53 +1266,81 @@ function confirmDel(){
 }
 
 // ═══════════════════════════════════════════════════════
-// CHARTS
+// PURE CSS CHARTS — sem dependência externa
 // ═══════════════════════════════════════════════════════
-let donutC,critC,tipoC,stackedC;
 function mkDonut(vals){
-  const ctx=document.getElementById('donutChart').getContext('2d');
-  if(donutC)donutC.destroy();
-  donutC=new Chart(ctx,{type:'doughnut',data:{labels:['Concluído','Em andamento','Atrasado','Não iniciado','Descontinuado'],datasets:[{data:vals,backgroundColor:['#1EB564','#F5A623','#D93535','#AAB8CC','#6C4DE8'],borderWidth:3,borderColor:'#fff',hoverOffset:6}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: ${c.raw}`}}}}});
+  var el=document.getElementById('donutChart'); if(!el)return;
+  var labels=['Concluído','Em andamento','Atrasado','Não iniciado','Descontinuado'];
+  var colors=['#1EB564','#F5A623','#D93535','#AAB8CC','#6C4DE8'];
+  var total=vals.reduce((a,b)=>a+b,0)||1;
+  // Total badge at top
+  var totalBadge='<div style="text-align:center;padding:10px 0 8px;border-bottom:1px solid #EEF1F7;margin-bottom:8px">'+
+    '<div style="font-size:32px;font-weight:800;color:var(--navy);line-height:1">'+total+'</div>'+
+    '<div style="font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px">TOTAL</div>'+
+  '</div>';
+  // Rows for each status
+  var rows=vals.map((v,i)=>{
+    var pct=Math.round(v/total*100);
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0">'+
+      '<div style="width:10px;height:10px;border-radius:3px;background:'+colors[i]+';flex-shrink:0"></div>'+
+      '<span style="font-size:11px;color:var(--txt);flex:1">'+labels[i]+'</span>'+
+      '<div style="width:80px;height:6px;background:#EEF1F7;border-radius:4px;overflow:hidden">'+
+        '<div style="width:'+pct+'%;height:100%;background:'+colors[i]+';border-radius:4px"></div>'+
+      '</div>'+
+      '<span style="font-size:11px;font-weight:700;color:'+colors[i]+';min-width:32px;text-align:right">'+v+'</span>'+
+    '</div>';
+  }).join('');
+  el.innerHTML='<div style="padding:4px 8px">'+totalBadge+rows+'</div>';
 }
 function mkCrit(vals,labs){
-  const ctx=document.getElementById('critChart').getContext('2d');
-  if(critC)critC.destroy();
-  critC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{data:vals,backgroundColor:['#FDEBEB','#FEF6E7','#E8F7EF'],borderColor:['#D93535','#F5A623','#1EB564'],borderWidth:2,borderRadius:8,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw} chamados`}}},scales:{x:{grid:{display:false},ticks:{font:{size:11,family:'Inter',weight:'600'}}},y:{grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true}}}});
+  var el=document.getElementById('critChart'); if(!el)return;
+  var colors=['#D93535','#F5A623','#1EB564'];
+  var max=Math.max.apply(null,vals.concat([1]));
+  el.innerHTML='<div class="css-chart">'+
+    vals.map((v,i)=>{
+      return '<div class="css-bar-row">'+
+        '<span class="css-bar-label">'+labs[i]+'</span>'+
+        '<div class="css-bar-track"><div class="css-bar-fill" style="width:'+Math.round(v/max*100)+'%;background:'+colors[i]+'">'+
+        '<span class="css-bar-val">'+(v||'')+'</span></div></div></div>';
+    }).join('')+'</div>';
 }
 function mkTipo(vals,labs){
-  const ctx=document.getElementById('tipoChart').getContext('2d');
-  if(tipoC)tipoC.destroy();
-  tipoC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{data:vals,backgroundColor:['#2E86D4','#1EB564','#6C4DE8','#F5A623','#0E9F8E','#E8632A'],borderRadius:6,borderSkipped:false}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw} chamados`}}},scales:{x:{grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true},y:{grid:{display:false},ticks:{font:{size:10}}}}}});
+  var el=document.getElementById('tipoChart'); if(!el)return;
+  var colors=['#2E86D4','#1EB564','#6C4DE8','#F5A623','#0E9F8E','#E8632A'];
+  var max=Math.max.apply(null,vals.concat([1]));
+  el.innerHTML='<div class="css-chart">'+
+    vals.map((v,i)=>{
+      return '<div class="css-bar-row">'+
+        '<span class="css-bar-label">'+labs[i]+'</span>'+
+        '<div class="css-bar-track"><div class="css-bar-fill" style="width:'+Math.round(v/max*100)+'%;background:'+colors[i]+'">'+
+        '<span class="css-bar-val">'+(v||'')+'</span></div></div></div>';
+    }).join('')+'</div>';
 }
 function mkPont(vals,labs){
-  const ctx=document.getElementById('pontChart');if(!ctx)return;
-  if(window._pontC)window._pontC.destroy();
-  window._pontC=new Chart(ctx.getContext('2d'),{
-    type:'bar',
-    data:{
-      labels:labs,
-      datasets:[
-        {label:'No prazo ou antes',data:vals[0],backgroundColor:'#1EB564',borderRadius:6,borderSkipped:false},
-        {label:'Com atraso',       data:vals[1],backgroundColor:'#D93535',borderRadius:6,borderSkipped:false},
-      ]
-    },
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{
-        legend:{display:true,position:'bottom',labels:{font:{size:10,family:'Inter'},boxWidth:10,padding:10}},
-        tooltip:{callbacks:{label:c=>` ${c.raw} ação(ões)`}}
-      },
-      scales:{
-        x:{grid:{display:false},ticks:{font:{size:10,family:'Inter'}}},
-        y:{grid:{color:'#EEF1F7'},ticks:{font:{size:10},stepSize:1},beginAtZero:true}
-      }
-    }
-  });
+  var el=document.getElementById('pontChart'); if(!el)return;
+  var noPrazo=vals[0][0]||0, comAtraso=vals[1][0]||0;
+  var max=Math.max(noPrazo,comAtraso,1);
+  el.innerHTML='<div class="css-chart">'+
+    '<div class="css-bar-row"><span class="css-bar-label">No prazo</span>'+
+    '<div class="css-bar-track"><div class="css-bar-fill" style="width:'+Math.round(noPrazo/max*100)+'%;background:#1EB564">'+
+    '<span class="css-bar-val">'+noPrazo+'</span></div></div></div>'+
+    '<div class="css-bar-row"><span class="css-bar-label">Com atraso</span>'+
+    '<div class="css-bar-track"><div class="css-bar-fill" style="width:'+Math.round(comAtraso/max*100)+'%;background:#D93535">'+
+    '<span class="css-bar-val">'+comAtraso+'</span></div></div></div>'+
+    '</div>';
 }
 function mkStacked(d,labs){
-  const ctx=document.getElementById('stackedChart').getContext('2d');
-  if(stackedC)stackedC.destroy();
-  stackedC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{label:'Concluído',data:d[0],backgroundColor:'#1EB564',stack:'s'},{label:'Em andamento',data:d[1],backgroundColor:'#F5A623',stack:'s'},{label:'Não iniciado',data:d[2],backgroundColor:'#AAB8CC',borderRadius:4,stack:'s'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'bottom',labels:{font:{size:10,family:'Inter'},boxWidth:10,padding:10}}},scales:{x:{stacked:true,grid:{display:false},ticks:{font:{size:10}}},y:{stacked:true,grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true}}}});
+  var el=document.getElementById('stackedChart'); if(!el)return;
+  var colors=['#1EB564','#F5A623','#AAB8CC'];
+  var rows=labs.map((lab,i)=>{
+    var total=(d[0][i]||0)+(d[1][i]||0)+(d[2][i]||0)||1;
+    var segs=d.map((ds,j)=>{
+      return ds[i]?'<div style="flex:'+ds[i]+';background:'+colors[j]+';height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:700">'+ds[i]+'</div>':'';
+    }).join('');
+    return '<div class="css-bar-row"><span class="css-bar-label">'+lab+'</span>'+
+      '<div class="css-bar-track" style="display:flex">'+segs+'</div></div>';
+  }).join('');
+  el.innerHTML='<div class="css-chart">'+rows+'</div>';
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1452,13 +1369,7 @@ function renderDashboard(){
   document.getElementById('kpi-naoinic-pct').textContent=n?Math.round(naoinic/n*100)+'% do total':'—';
   document.getElementById('kpi-atr-pct').textContent=n?Math.round(atr/n*100)+'% do total':'—';
 
-  document.getElementById('donut-center-val').textContent=n;
   mkDonut([concl,andando,atr,naoinic,disc]);
-  document.getElementById('leg-concl').textContent=`${concl} (${n?Math.round(concl/n*100):0}%)`;
-  document.getElementById('leg-and').textContent=`${andando} (${n?Math.round(andando/n*100):0}%)`;
-  document.getElementById('leg-atr').textContent=`${atr} (${n?Math.round(atr/n*100):0}%)`;
-  document.getElementById('leg-naoinic').textContent=`${naoinic} (${n?Math.round(naoinic/n*100):0}%)`;
-  document.getElementById('leg-disc').textContent=`${disc}`;
 
   const areas=["Manutenção","Portaria/Acesso","Contratos","Obras/Reforma","Restaurante","Segurança/Incêndio"];
   const areaColors=['#2E86D4','#6C4DE8','#0E9F8E','#E8632A','#F5A623','#D93535'];
