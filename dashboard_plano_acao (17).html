@@ -1,0 +1,1636 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Dash Board — Plano de Ação Gerencial</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+// ── Firebase REST API (works from file://, no SDK needed) ─────────────────
+const FB_PROJECT = 'planolog-6f9fd';
+const FB_KEY     = 'AIzaSyAJIpVZFnXKK_TaxNPdhYoCtzGGj4E5s2k';
+const FB_BASE    = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents`;
+const COL        = 'acoes';
+
+// Convert JS object → Firestore REST document fields
+function toFields(d){
+  const f = {};
+  const str = v => ({stringValue: String(v||'')});
+  const num = v => ({integerValue: String(Number(v)||0)});
+  f.resp     = str(d.resp);
+  f.area     = str(d.area);
+  f.tipo     = str(d.tipo);
+  f.crit     = str(d.crit);
+  f.status   = str(d.status);
+  f.prazo    = str(d.prazo);
+  f.abertura = str(d.abertura);
+  f.concl    = str(d.concl);
+  f.desc     = str(d.desc);
+  f.acao     = str(d.acao);
+  f.obs      = str(d.obs);
+  f.replan   = str(JSON.stringify(d.replan||[]));
+  f.ordem    = num(d.ordem || d.id || 0);
+  return { fields: f };
+}
+
+// Convert Firestore REST document → JS object
+function fromFields(doc){
+  const f = doc.fields || {};
+  const s = k => (f[k]&&f[k].stringValue) || '';
+  const n = k => parseInt((f[k]&&(f[k].integerValue||f[k].doubleValue)) || 0);
+  const _ref = doc.name ? doc.name.split('/').pop() : '';
+  return {
+    _ref,
+    id:       n('ordem'),
+    resp:     s('resp'),
+    area:     s('area'),
+    tipo:     s('tipo'),
+    crit:     s('crit'),
+    status:   s('status'),
+    prazo:    s('prazo'),
+    abertura: s('abertura'),
+    concl:    s('concl'),
+    desc:     s('desc'),
+    acao:     s('acao'),
+    obs:      s('obs'),
+    replan:   (() => { try{ return JSON.parse(s('replan')||'[]'); }catch(e){ return []; } })()
+  };
+}
+
+async function fbLoad(){
+  const url = `${FB_BASE}/${COL}?key=${FB_KEY}&orderBy=ordem&pageSize=500`;
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('Firestore GET ' + r.status + ': ' + await r.text());
+  const data = await r.json();
+  if(!data.documents) return [];
+  return data.documents
+    .map(fromFields)
+    .sort((a,b) => a.id - b.id);
+}
+
+async function fbAdd(d){
+  const url = `${FB_BASE}/${COL}?key=${FB_KEY}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(toFields(d))
+  });
+  if(!r.ok) throw new Error('Firestore POST ' + r.status + ': ' + await r.text());
+  const doc = await r.json();
+  return { ...d, _ref: doc.name.split('/').pop() };
+}
+
+async function fbUpdate(d){
+  if(!d._ref){ console.warn('fbUpdate: no _ref', d.id); return d; }
+  // Build update mask from all fields
+  const fields = ['resp','area','tipo','crit','status','prazo','abertura','concl','desc','acao','obs','replan','ordem'];
+  const mask = fields.map(f=>`updateMask.fieldPaths=${f}`).join('&');
+  const url = `${FB_BASE}/${COL}/${d._ref}?key=${FB_KEY}&${mask}`;
+  const r = await fetch(url, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(toFields(d))
+  });
+  if(!r.ok) throw new Error('Firestore PATCH ' + r.status + ': ' + await r.text());
+  return d;
+}
+
+async function fbDel(d){
+  if(!d._ref) return;
+  const url = `${FB_BASE}/${COL}/${d._ref}?key=${FB_KEY}`;
+  const r = await fetch(url, { method: 'DELETE' });
+  if(!r.ok) throw new Error('Firestore DELETE ' + r.status);
+}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+:root{
+  --navy:#0F2744;--blue:#1557A0;--sky:#2E86D4;--teal:#0E9F8E;
+  --green:#1EB564;--yellow:#F5A623;--orange:#E8632A;--red:#D93535;
+  --purple:#6C4DE8;--bg:#F0F4FA;--card:#FFFFFF;--border:#DDE4EF;
+  --txt:#1A2B45;--muted:#7A90B0;--sidebar:#0F2744;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--txt);font-size:13px;}
+.layout{display:flex;height:100vh;overflow:hidden;}
+
+/* SIDEBAR */
+.sidebar{width:210px;flex-shrink:0;background:var(--sidebar);display:flex;flex-direction:column;overflow-y:auto;}
+.sidebar-logo{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,.1);}
+.logo-icon{width:36px;height:36px;background:var(--sky);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:8px;}
+.sidebar-logo h2{font-size:12px;font-weight:700;color:#fff;letter-spacing:.5px;line-height:1.3;}
+.sidebar-logo p{font-size:10px;color:rgba(255,255,255,.45);margin-top:2px;}
+.filter-section{padding:14px 14px 0;}
+.filter-label{font-size:9px;font-weight:700;color:rgba(255,255,255,.4);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px;}
+.filter-pill{display:block;width:100%;background:transparent;border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.75);border-radius:6px;padding:6px 10px;font-size:11px;font-family:inherit;cursor:pointer;text-align:left;transition:all .15s;margin-bottom:4px;}
+.filter-pill:hover,.filter-pill.active{background:var(--sky);border-color:var(--sky);color:#fff;}
+.sidebar-footer{margin-top:auto;padding:14px 16px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:rgba(255,255,255,.3);}
+
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.topbar{background:var(--navy);padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.topbar-title{font-size:15px;font-weight:700;color:#fff;}
+.topbar-meta{font-size:11px;color:rgba(255,255,255,.45);}
+.topbar-badge{background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);padding:4px 10px;border-radius:20px;font-size:10px;font-weight:600;}
+.tabs{display:flex;background:var(--navy);padding:0 24px;flex-shrink:0;border-top:1px solid rgba(255,255,255,.08);}
+.tab-btn{padding:10px 20px;font-size:12px;font-weight:600;color:rgba(255,255,255,.5);background:transparent;border:none;cursor:pointer;border-bottom:3px solid transparent;font-family:inherit;transition:all .15s;}
+.tab-btn:hover{color:rgba(255,255,255,.85);}
+.tab-btn.active{color:#fff;border-bottom-color:var(--sky);}
+.content{flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:14px;}
+.tab-panel{display:none;flex-direction:column;gap:14px;}
+.tab-panel.active{display:flex;}
+
+/* CARDS */
+.card{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;}
+.card-header{padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between;}
+.card-title{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.8px;text-transform:uppercase;}
+.card-body{padding:12px 16px 14px;}
+
+/* KPI */
+.kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+.kpi-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 14px 12px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;}
+.kpi-total::before{background:var(--blue);}.kpi-concl::before{background:var(--green);}
+.kpi-and::before{background:var(--yellow);}.kpi-naoinic::before{background:var(--muted);}
+.kpi-atr::before{background:var(--red);}.kpi-pct::before{background:var(--teal);}
+.kpi-icon{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;}
+.kpi-total .kpi-icon{background:#EBF1FB;}.kpi-concl .kpi-icon{background:#E8F7EF;}
+.kpi-and .kpi-icon{background:#FEF6E7;}.kpi-naoinic .kpi-icon{background:#F0F2F7;}
+.kpi-atr .kpi-icon{background:#FDEBEB;}.kpi-pct .kpi-icon{background:#E7F8F5;}
+.kpi-value{font-size:26px;font-weight:800;line-height:1;}
+.kpi-total .kpi-value{color:var(--blue);}.kpi-concl .kpi-value{color:var(--green);}
+.kpi-and .kpi-value{color:var(--yellow);}.kpi-naoinic .kpi-value{color:var(--muted);}
+.kpi-atr .kpi-value{color:var(--red);}.kpi-pct .kpi-value{color:var(--teal);}
+.kpi-label{font-size:11px;color:var(--muted);font-weight:500;}
+.kpi-sub{font-size:10px;color:#AAB8CC;}
+
+/* ROW2/ROW3 */
+.row2{display:grid;grid-template-columns:240px 1fr 1fr;gap:14px;}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.donut-wrap{position:relative;width:148px;height:148px;margin:0 auto;}
+.donut-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;}
+.donut-center .big{font-size:30px;font-weight:800;color:var(--navy);}
+.donut-center .sm{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.5px;}
+.legend{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;}
+.legend-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+.legend-pct{margin-left:auto;font-weight:700;}
+.pbar-row{display:flex;flex-direction:column;gap:9px;}
+.pbar-info{display:flex;justify-content:space-between;margin-bottom:3px;}
+.pbar-name{font-size:11px;font-weight:600;}.pbar-val{font-size:11px;font-weight:700;}
+.pbar-track{height:7px;background:var(--border);border-radius:10px;overflow:hidden;}
+.pbar-fill{height:100%;border-radius:10px;transition:width .6s ease;}
+.chart-box{padding:0 16px 14px;height:190px;}
+.chart-box-tall{padding:0 16px 14px;height:210px;}
+.ranking-table{width:100%;border-collapse:collapse;}
+.ranking-table th{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;padding:0 0 8px;border-bottom:1px solid var(--border);text-align:left;}
+.ranking-table td{padding:7px 0;font-size:11px;border-bottom:1px solid var(--bg);vertical-align:middle;}
+.rank-badge{width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;background:var(--bg);color:var(--muted);}
+.rank-badge.gold{background:#FFF3CD;color:#B8860B;}.rank-badge.silver{background:#F0F0F0;color:#777;}.rank-badge.bronze{background:#FDE8D8;color:#A04020;}
+
+/* TOOLBAR + TABLE */
+.table-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.search-box{flex:1;min-width:180px;display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:7px 12px;}
+.search-box input{border:none;background:transparent;font-family:inherit;font-size:12px;color:var(--txt);outline:none;width:100%;}
+.search-box input::placeholder{color:var(--muted);}
+.tbl-count{font-size:11px;color:var(--muted);}
+.data-table-wrap{overflow-x:auto;max-height:calc(100vh - 260px);}
+table.data-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+table.data-tbl thead{position:sticky;top:0;z-index:2;}
+table.data-tbl thead tr{background:var(--navy);}
+table.data-tbl thead th{padding:10px 10px;text-align:left;font-size:10px;font-weight:700;color:rgba(255,255,255,.7);letter-spacing:.7px;text-transform:uppercase;white-space:nowrap;cursor:pointer;user-select:none;}
+table.data-tbl thead th:hover{color:#fff;}
+table.data-tbl tbody tr{border-bottom:1px solid var(--bg);transition:background .1s;}
+table.data-tbl tbody tr:hover{background:#F5F8FE;}
+table.data-tbl tbody tr.row-atr{background:#FFF8F8;}
+table.data-tbl tbody tr.row-atr:hover{background:#FDEEED;}
+table.data-tbl tbody tr.row-disc{background:#F9F9FB;opacity:.7;}
+table.data-tbl td{padding:9px 10px;vertical-align:top;}
+
+/* BADGES */
+.sbadge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap;}
+.sbadge.concl{background:#E8F7EF;color:#1EB564;}.sbadge.and{background:#FEF6E7;color:#D48A00;}
+.sbadge.naoinic{background:#F0F2F7;color:#7A90B0;}.sbadge.atr{background:#FDEBEB;color:#D93535;}
+.sbadge.disc{background:#F0EEF8;color:#6C4DE8;}
+.cbadge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;}
+.cbadge.alta{background:#FDEBEB;color:#D93535;}.cbadge.media{background:#FEF6E7;color:#D48A00;}.cbadge.baixa{background:#E8F7EF;color:#1EB564;}
+
+/* ACTION BUTTONS in table */
+.act-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:10px;font-family:inherit;cursor:pointer;color:var(--muted);transition:all .12s;white-space:nowrap;}
+.act-btn:hover{border-color:var(--sky);color:var(--sky);}
+.act-btn.danger:hover{border-color:var(--red);color:var(--red);}
+.act-btn.success:hover{border-color:var(--green);color:var(--green);}
+.btn-actions{display:flex;gap:4px;flex-wrap:wrap;}
+
+/* ADD BUTTON */
+.btn-primary{display:inline-flex;align-items:center;gap:6px;background:var(--sky);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background .15s;}
+.btn-primary:hover{background:var(--blue);}
+
+/* MODAL OVERLAY */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(15,39,68,.55);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(2px);}
+.modal-overlay.open{display:flex;}
+.modal{background:#fff;border-radius:16px;width:640px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 24px 60px rgba(0,0,0,.18);display:flex;flex-direction:column;}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.modal-title{font-size:15px;font-weight:700;color:var(--navy);}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:0 4px;}
+.modal-close:hover{color:var(--txt);}
+.modal-body{padding:20px 24px;flex:1;}
+.modal-footer{padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;flex-shrink:0;}
+
+/* FORM */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.form-grid.full{grid-template-columns:1fr;}
+.form-group{display:flex;flex-direction:column;gap:5px;}
+.form-group.span2{grid-column:span 2;}
+.form-label{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;}
+.form-label .req{color:var(--red);}
+.form-input,.form-select,.form-textarea{font-family:inherit;font-size:12px;color:var(--txt);background:var(--bg);border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;outline:none;transition:border-color .15s;width:100%;}
+.form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--sky);background:#fff;}
+.form-textarea{resize:vertical;min-height:72px;}
+.form-section-title{font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.8px;padding:10px 0 6px;border-bottom:1px solid var(--border);margin-bottom:4px;grid-column:span 2;}
+
+/* DISC MODAL extras */
+.disc-warn{background:#F0EEF8;border:1px solid #C4B8F0;border-radius:8px;padding:12px 14px;font-size:12px;color:#5A3FBF;margin-bottom:14px;}
+
+/* acao text expand */
+.acao-toggle{font-size:10px;color:var(--sky);cursor:pointer;margin-top:3px;display:inline-block;background:none;border:none;font-family:inherit;padding:0;}
+.acao-full{display:none;}
+.expanded .acao-full{display:block;}
+.expanded .acao-short{display:none;}
+
+/* inline-bar */
+.inline-bar{height:5px;border-radius:4px;display:inline-block;margin-left:4px;vertical-align:middle;}
+
+/* replan highlight */
+.replan-tag{display:inline-block;background:#FFF3CD;color:#B8860B;border-radius:4px;padding:1px 6px;font-size:9px;font-weight:700;margin-left:4px;}
+
+/* toast */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--navy);color:#fff;padding:12px 20px;border-radius:10px;font-size:12px;font-weight:600;z-index:9999;transform:translateY(60px);opacity:0;transition:all .3s;pointer-events:none;}
+.toast.show{transform:translateY(0);opacity:1;}
+
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px;}
+</style>
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- DEBUG PANEL -->
+<div id="debug-panel" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#0F2744;color:#7FFF7F;font-family:monospace;font-size:11px;padding:10px 16px;max-height:220px;overflow-y:auto;border-top:2px solid #2E86D4">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <strong style="color:#fff">🔍 DEBUG LOG</strong>
+    <button onclick="document.getElementById('debug-panel').style.display='none'" style="background:#D93535;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">Fechar</button>
+  </div>
+  <div id="debug-log"></div>
+</div>
+
+<!-- ═══════════ MODAL: NOVA / EDITAR AÇÃO ═══════════ -->
+<div class="modal-overlay" id="modal-form">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-form-title">Nova Ação</span>
+      <button class="modal-close" onclick="closeModal('modal-form')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-section-title">Identificação</div>
+        <div class="form-group">
+          <label class="form-label">Responsável <span class="req">*</span></label>
+          <input class="form-input" id="f-resp" list="list-resp" placeholder="Nome do responsável" autocomplete="off"/>
+          <datalist id="list-resp">
+            <option value="Diego"/><option value="Otavio"/><option value="Diego/Renata"/>
+            <option value="Log obras/Diego"/><option value="Log obras/Diego/Renata"/>
+          </datalist>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Área <span class="req">*</span></label>
+          <select class="form-select" id="f-area">
+            <option value="">Selecione…</option>
+            <option>Manutenção</option><option>Portaria/Acesso</option><option>Contratos</option>
+            <option>Obras/Reforma</option><option>Restaurante</option><option>Segurança/Incêndio</option><option>Outros</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tipo de Chamado <span class="req">*</span></label>
+          <select class="form-select" id="f-tipo">
+            <option value="">Selecione…</option>
+            <option>Manutenção Corretiva</option><option>Manutenção Preventiva</option>
+            <option>Contrato/BID</option><option>Serviço Terceirizado</option>
+            <option>Renovação Contratual</option><option>Melhoria</option><option>Outros</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Criticidade <span class="req">*</span></label>
+          <select class="form-select" id="f-crit">
+            <option value="">Selecione…</option>
+            <option>Alta</option><option>Média</option><option>Baixa</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status <span class="req">*</span></label>
+          <select class="form-select" id="f-status" onchange="onStatusChange()">
+            <option value="">Selecione…</option>
+            <option>Não iniciado</option><option>Em andamento</option><option>Concluído</option><option>Descontinuado</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Data Prevista (Prazo) <span class="req">*</span></label>
+          <input class="form-input" id="f-prazo" type="date" onchange="onPrazoChange()"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Data de Abertura</label>
+          <input class="form-input" id="f-abertura" type="date"/>
+        </div>
+        <div class="form-group" id="grp-concl">
+          <label class="form-label">Data de Conclusão <span id="concl-req" style="display:none" class="req">*</span></label>
+          <input class="form-input" id="f-concl" type="date" onchange="onConclChange()"/>
+        </div>
+        <div class="form-group span2" id="grp-replan" style="display:none">
+          <label class="form-label">Motivo do Replanejamento <span class="req">*</span></label>
+          <textarea class="form-textarea" id="f-replan-motivo" placeholder="Informe o motivo da alteração de prazo…" style="min-height:56px"></textarea>
+        </div>
+        <div class="form-group span2" id="grp-disc-just" style="display:none">
+          <div class="disc-warn" style="margin-bottom:0">🚫 Esta ação será marcada como <strong>Descontinuada</strong>. O registro permanece no histórico mas sairá das pendentes.</div>
+          <label class="form-label" style="margin-top:10px">Justificativa de Descontinuação <span class="req">*</span></label>
+          <textarea class="form-textarea" id="f-disc-just" placeholder="Por que esta ação está sendo descontinuada?" style="min-height:72px"></textarea>
+        </div>
+        <div class="form-section-title">Conteúdo</div>
+        <div class="form-group span2">
+          <label class="form-label">Descrição do Problema / Objetivo <span class="req">*</span></label>
+          <textarea class="form-textarea" id="f-desc" placeholder="Descreva o problema ou o objetivo da ação…"></textarea>
+        </div>
+        <div class="form-group span2">
+          <label class="form-label">Ação Planejada / Andamento</label>
+          <textarea class="form-textarea" id="f-acao" placeholder="Detalhes das ações realizadas ou planejadas…" style="min-height:90px"></textarea>
+        </div>
+        <div class="form-group span2">
+          <label class="form-label">Observações</label>
+          <textarea class="form-textarea" id="f-obs" placeholder="Observações adicionais, pendências, dependências…"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="closeModal('modal-form')">Cancelar</button>
+      <button class="btn-primary" onclick="saveForm()">💾 Salvar Ação</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL: REPLANEJAMENTO ═══════════ -->
+<div class="modal-overlay" id="modal-replan">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title">📅 Replanejamento de Prazo</span>
+      <button class="modal-close" onclick="closeModal('modal-replan')">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Ação <strong id="replan-id-label"></strong></p>
+      <div class="form-grid full">
+        <div class="form-group">
+          <label class="form-label">Novo Prazo <span class="req">*</span></label>
+          <input class="form-input" id="replan-prazo" type="date"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Motivo do Replanejamento <span class="req">*</span></label>
+          <textarea class="form-textarea" id="replan-motivo" placeholder="Justifique o motivo do novo prazo…"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="closeModal('modal-replan')">Cancelar</button>
+      <button class="btn-primary" onclick="saveReplan()">📅 Confirmar Novo Prazo</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL: MARCAR CONCLUÍDO ═══════════ -->
+<div class="modal-overlay" id="modal-concl">
+  <div class="modal" style="width:400px">
+    <div class="modal-header">
+      <span class="modal-title">✅ Marcar como Concluído</span>
+      <button class="modal-close" onclick="closeModal('modal-concl')">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Ação <strong id="concl-id-label"></strong></p>
+      <div class="form-group">
+        <label class="form-label">Data de Conclusão <span class="req">*</span></label>
+        <input class="form-input" id="concl-data" type="date"/>
+      </div>
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label">Comentário final (opcional)</label>
+        <textarea class="form-textarea" id="concl-obs" placeholder="Registre como a ação foi finalizada…"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="closeModal('modal-concl')">Cancelar</button>
+      <button class="btn-primary" style="background:var(--green)" onclick="saveConcl()">✅ Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL: DESCONTINUAR ═══════════ -->
+<div class="modal-overlay" id="modal-disc">
+  <div class="modal" style="width:460px">
+    <div class="modal-header">
+      <span class="modal-title" style="color:var(--purple)">🚫 Descontinuar Ação</span>
+      <button class="modal-close" onclick="closeModal('modal-disc')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="disc-warn">⚠️ A ação será marcada como <strong>Descontinuada</strong> e ficará oculta nas tabelas de pendentes. O registro permanece no histórico para fins de auditoria.</div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Ação <strong id="disc-id-label"></strong></p>
+      <div class="form-group">
+        <label class="form-label">Justificativa <span class="req">*</span></label>
+        <textarea class="form-textarea" id="disc-motivo" placeholder="Por que esta ação está sendo descontinuada? Descreva o motivo…" style="min-height:90px"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="closeModal('modal-disc')">Cancelar</button>
+      <button class="btn-primary" style="background:var(--purple)" onclick="saveDisc()">🚫 Confirmar Descontinuação</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MODAL: CONFIRMAR EXCLUSÃO ═══════════ -->
+<div class="modal-overlay" id="modal-del">
+  <div class="modal" style="width:400px">
+    <div class="modal-header">
+      <span class="modal-title" style="color:var(--red)">🗑️ Excluir Ação</span>
+      <button class="modal-close" onclick="closeModal('modal-del')">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--txt);line-height:1.5">Tem certeza que deseja <strong>excluir permanentemente</strong> a ação <strong id="del-id-label"></strong>?</p>
+      <p style="font-size:11px;color:var(--muted);margin-top:8px">Esta operação não pode ser desfeita. Se preferir manter o histórico, use "Descontinuar".</p>
+    </div>
+    <div class="modal-footer">
+      <button class="act-btn" onclick="closeModal('modal-del')">Cancelar</button>
+      <button class="btn-primary" style="background:var(--red)" onclick="confirmDel()">🗑️ Excluir Permanentemente</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════ -->
+<div class="layout">
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">📋</div>
+    <h2>PIB MELLI</h2>
+    <p>Plano de Ação Gerencial</p>
+  </div>
+  <div class="filter-section" style="margin-top:14px">
+    <div class="filter-label">👤 Responsável</div>
+    <button class="filter-pill active" onclick="setFilter('resp','Todos')">Todos</button>
+    <button class="filter-pill" onclick="setFilter('resp','Diego')">Diego</button>
+    <button class="filter-pill" onclick="setFilter('resp','Otavio')">Otávio</button>
+    <button class="filter-pill" onclick="setFilter('resp','Diego/Renata')">Diego / Renata</button>
+    <button class="filter-pill" onclick="setFilter('resp','Log obras/Diego')">Log / Diego</button>
+    <button class="filter-pill" onclick="setFilter('resp','Log obras/Diego/Renata')">Log / Diego / Renata</button>
+  </div>
+  <div class="filter-section" style="margin-top:14px">
+    <div class="filter-label">🔘 Status</div>
+    <button class="filter-pill active" onclick="setFilter('status','Todos')">Todos</button>
+    <button class="filter-pill" onclick="setFilter('status','Concluído')">✅ Concluído</button>
+    <button class="filter-pill" onclick="setFilter('status','Em andamento')">🔄 Em andamento</button>
+    <button class="filter-pill" onclick="setFilter('status','Não iniciado')">⏳ Não iniciado</button>
+    <button class="filter-pill" onclick="setFilter('status','Atrasado')">🔴 Atrasado</button>
+    <button class="filter-pill" onclick="setFilter('status','Descontinuado')">🚫 Descontinuado</button>
+  </div>
+  <div class="filter-section" style="margin-top:14px">
+    <div class="filter-label">🏢 Área</div>
+    <button class="filter-pill active" onclick="setFilter('area','Todos')">Todos</button>
+    <button class="filter-pill" onclick="setFilter('area','Manutenção')">Manutenção</button>
+    <button class="filter-pill" onclick="setFilter('area','Portaria/Acesso')">Portaria / Acesso</button>
+    <button class="filter-pill" onclick="setFilter('area','Contratos')">Contratos</button>
+    <button class="filter-pill" onclick="setFilter('area','Obras/Reforma')">Obras / Reforma</button>
+    <button class="filter-pill" onclick="setFilter('area','Restaurante')">Restaurante</button>
+    <button class="filter-pill" onclick="setFilter('area','Segurança/Incêndio')">Segurança / Incêndio</button>
+  </div>
+  <div class="filter-section" style="margin-top:14px">
+    <div class="filter-label">🔥 Criticidade</div>
+    <button class="filter-pill active" onclick="setFilter('crit','Todos')">Todos</button>
+    <button class="filter-pill" onclick="setFilter('crit','Alta')">🔴 Alta</button>
+    <button class="filter-pill" onclick="setFilter('crit','Média')">🟡 Média</button>
+    <button class="filter-pill" onclick="setFilter('crit','Baixa')">🟢 Baixa</button>
+  </div>
+  <div class="sidebar-footer">Atualizado em 30/07/2026</div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">Dash Board — Plano de Ação Gerencial</div>
+      <div class="topbar-meta">Condomínio PIB Melli · Julho 2026</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:10px;color:rgba(255,255,255,.4);background:rgba(255,255,255,.06);border-radius:6px;padding:5px 10px">🕐 30/07/2026</span>
+      <button onclick="exportData()" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.2);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer" title="Exportar dados como JSON">💾 Exportar</button>
+      <button onclick="importData()" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.2);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer" title="Importar backup JSON">📂 Importar</button>
+      <span class="topbar-badge">EXECUTIVO</span>
+    </div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('dashboard')">📊 Dashboard</button>
+    <button class="tab-btn" onclick="switchTab('pendentes')">⚠️ Pendentes</button>
+    <button class="tab-btn" onclick="switchTab('concluidos')">✅ Concluídos</button>
+    <button class="tab-btn" onclick="switchTab('todos')">📋 Todos os Chamados</button>
+  </div>
+
+  <div class="content">
+
+    <!-- ═══ DASHBOARD ═══ -->
+    <div class="tab-panel active" id="tab-dashboard">
+      <div class="kpi-strip">
+        <div class="kpi-card kpi-total"><div class="kpi-icon">📋</div><div class="kpi-value" id="kpi-total">—</div><div class="kpi-label">Total Chamados</div><div class="kpi-sub" id="kpi-total-sub"></div></div>
+        <div class="kpi-card kpi-concl"><div class="kpi-icon">✅</div><div class="kpi-value" id="kpi-concl">—</div><div class="kpi-label">Concluídos</div><div class="kpi-sub" id="kpi-concl-pct"></div></div>
+        <div class="kpi-card kpi-and"><div class="kpi-icon">🔄</div><div class="kpi-value" id="kpi-and">—</div><div class="kpi-label">Em Andamento</div><div class="kpi-sub" id="kpi-and-pct"></div></div>
+        <div class="kpi-card kpi-naoinic"><div class="kpi-icon">⏳</div><div class="kpi-value" id="kpi-naoinic">—</div><div class="kpi-label">Não Iniciados</div><div class="kpi-sub" id="kpi-naoinic-pct"></div></div>
+        <div class="kpi-card kpi-atr"><div class="kpi-icon">🔴</div><div class="kpi-value" id="kpi-atr">—</div><div class="kpi-label">Atrasados</div><div class="kpi-sub" id="kpi-atr-pct"></div></div>
+        <div class="kpi-card kpi-pct"><div class="kpi-icon">📊</div><div class="kpi-value" id="kpi-pct">—</div><div class="kpi-label">% Conclusão</div><div class="kpi-sub">Meta: 50%</div></div>
+      </div>
+      <div class="row2">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Status Geral das Ações</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;align-items:center">
+            <div class="donut-wrap"><canvas id="donutChart"></canvas>
+              <div class="donut-center"><div class="big" id="donut-center-val">—</div><div class="sm">TOTAL</div></div>
+            </div>
+            <div class="legend" style="width:100%">
+              <div class="legend-item"><div class="legend-dot" style="background:#1EB564"></div>Concluído<span class="legend-pct" style="color:#1EB564" id="leg-concl"></span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#F5A623"></div>Em andamento<span class="legend-pct" style="color:#F5A623" id="leg-and"></span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#D93535"></div>Atrasado<span class="legend-pct" style="color:#D93535" id="leg-atr"></span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#AAB8CC"></div>Não iniciado<span class="legend-pct" style="color:#AAB8CC" id="leg-naoinic"></span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#6C4DE8"></div>Descontinuado<span class="legend-pct" style="color:#6C4DE8" id="leg-disc"></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Chamados por Área</span></div>
+          <div class="card-body"><div class="pbar-row" id="area-bars"></div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Chamados por Criticidade</span></div>
+          <div class="chart-box"><canvas id="critChart"></canvas></div>
+        </div>
+      </div>
+      <div class="row3">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Ranking — Responsável</span></div>
+          <div class="card-body"><table class="ranking-table"><thead><tr><th>#</th><th>Responsável</th><th>Total</th><th>Concluídos</th></tr></thead><tbody id="ranking-tbody"></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Chamados por Tipo</span></div>
+          <div class="chart-box-tall"><canvas id="tipoChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Criticidade × Status</span></div>
+          <div class="chart-box-tall"><canvas id="stackedChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- ROW 4: Pontualidade -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Concluídas — Pontualidade</span></div>
+          <div class="chart-box-tall"><canvas id="pontChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-header" style="padding-bottom:10px">
+            <span class="card-title">Resumo de Pontualidade</span>
+          </div>
+          <div class="card-body" id="pont-summary" style="display:flex;flex-direction:column;gap:10px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PENDENTES ═══ -->
+    <div class="tab-panel" id="tab-pendentes">
+      <div class="card">
+        <div class="table-toolbar">
+          <span style="font-size:13px;font-weight:700;color:var(--red)">⚠️ Ações Pendentes</span>
+          <button class="btn-primary" style="margin-left:auto" onclick="openNew()">＋ Nova Ação</button>
+          <span class="tbl-count" id="pend-count"></span>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-tbl">
+            <thead><tr>
+              <th>🚦</th>
+              <th onclick="sortT('pend',0)">ID ↕</th>
+              <th onclick="sortT('pend',1)">Responsável ↕</th>
+              <th onclick="sortT('pend',2)">Área ↕</th>
+              <th onclick="sortT('pend',3)">Crit. ↕</th>
+              <th style="min-width:200px">Descrição</th>
+              <th style="min-width:220px">Última Ação / Próximo Passo</th>
+              <th onclick="sortT('pend',4)">Prazo ↕</th>
+              <th onclick="sortT('pend',5)">Status ↕</th>
+              <th>Atraso</th>
+              <th>Observações</th>
+              <th style="min-width:160px">Ações</th>
+            </tr></thead>
+            <tbody id="pend-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CONCLUÍDOS ═══ -->
+    <div class="tab-panel" id="tab-concluidos">
+      <div class="card">
+        <div class="table-toolbar">
+          <div class="search-box">
+            <span style="color:var(--muted)">🔍</span>
+            <input type="text" id="search-concl" placeholder="Buscar por descrição, responsável, área…" oninput="renderConcluidos()"/>
+          </div>
+          <span style="font-size:13px;font-weight:700;color:var(--green)">✅ Chamados Concluídos</span>
+          <span class="tbl-count" id="concl-count"></span>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-tbl">
+            <thead><tr>
+              <th>🚦</th>
+              <th onclick="sortT('concl',0)">ID ↕</th>
+              <th onclick="sortT('concl',1)">Responsável ↕</th>
+              <th onclick="sortT('concl',2)">Área ↕</th>
+              <th onclick="sortT('concl',3)">Tipo ↕</th>
+              <th onclick="sortT('concl',4)">Crit. ↕</th>
+              <th style="min-width:200px">Descrição</th>
+              <th onclick="sortT('concl',5)">Prazo Original ↕</th>
+              <th onclick="sortT('concl',6)">Data Conclusão ↕</th>
+              <th>Pontualidade</th>
+              <th>Observações</th>
+              <th>Ações</th>
+            </tr></thead>
+            <tbody id="concl-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TODOS ═══ -->
+    <div class="tab-panel" id="tab-todos">
+      <div class="card">
+        <div class="table-toolbar">
+          <div class="search-box">
+            <span style="color:var(--muted)">🔍</span>
+            <input type="text" id="search-input" placeholder="Buscar por descrição, responsável, área…" oninput="renderTodos()"/>
+          </div>
+          <button class="btn-primary" onclick="openNew()">＋ Nova Ação</button>
+          <span class="tbl-count" id="todos-count"></span>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-tbl">
+            <thead><tr>
+              <th>🚦</th>
+              <th onclick="sortT('todos',0)">ID ↕</th>
+              <th onclick="sortT('todos',1)">Responsável ↕</th>
+              <th onclick="sortT('todos',2)">Área ↕</th>
+              <th onclick="sortT('todos',3)">Tipo ↕</th>
+              <th onclick="sortT('todos',4)">Crit. ↕</th>
+              <th style="min-width:200px">Descrição</th>
+              <th style="min-width:220px">Ação Planejada</th>
+              <th onclick="sortT('todos',5)">Prazo ↕</th>
+              <th onclick="sortT('todos',6)">Status ↕</th>
+              <th>Observações</th>
+              <th style="min-width:160px">Ações</th>
+            </tr></thead>
+            <tbody id="todos-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</div><!-- /layout -->
+
+<script>
+// ── debug no-op ───────────────────────────────────────────────────────────
+function dbg(msg, color){ /* no-op */ }
+
+// ═══════════════════════════════════════════════════════
+// SEED DATA
+// ═══════════════════════════════════════════════════════
+const SEED = [
+  {id:1,resp:"Diego",area:"Manutenção",tipo:"Serviço Terceirizado",crit:"Média",status:"Em andamento",prazo:"2026-08-07",abertura:"2026-07-01",concl:"",desc:"Providenciar contratação de empresa spot de jardinagem para poda de áreas externas.",acao:"Orçamento não aprovado pelo Mercado Livre (custo alto). Novo orçamento solicitado com execução faseada. Previsão Super Tropa: 31/07/2026. Previsão LR Service: 03/08/2026.",obs:"",replan:[]},
+  {id:2,resp:"Diego",area:"Manutenção",tipo:"Contrato/BID",crit:"Média",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Abertura de BID para contrato de incêndio.",acao:"BID aberto pelo time de Suprimentos LOG. Orçamentos enviados para: Fire Force, São Marcos, Adrisan, Rota Xavier, Unifogo. Abadia aguardando retorno até 04/08/2026.",obs:"",replan:[]},
+  {id:3,resp:"Diego",area:"Manutenção",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Concluído",prazo:"2026-07-19",abertura:"2026-07-01",concl:"2026-07-19",desc:"Refazer análise de óleo do Trafo 04.",acao:"Orçamento aprovado. Coleta realizada pela Eletricom. Relatório entregue em 19/07/2026.",obs:"",replan:[]},
+  {id:4,resp:"Diego",area:"Portaria/Acesso",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Concluído",prazo:"2026-07-21",abertura:"2026-07-01",concl:"2026-07-21",desc:"Trocar cancela 1B danificada devido a batida.",acao:"Orçamento realizado e aprovado. Atividade finalizada em 21/07/2026.",obs:"",replan:[]},
+  {id:5,resp:"Diego",area:"Manutenção",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Concluído",prazo:"2026-07-15",abertura:"2026-07-01",concl:"2026-07-15",desc:"Calibração de válvulas flowmiter, válvula de alívio e manômetros.",acao:"Atividade finalizada em 15/07/2026.",obs:"Falta certificados de calibração pela empresa Calibracenter.",replan:[]},
+  {id:6,resp:"Diego",area:"Contratos",tipo:"Renovação Contratual",crit:"Média",status:"Em andamento",prazo:"2026-07-24",abertura:"2026-07-01",concl:"",desc:"Verificar interesse de empresas contratadas com vencimento próximo e solicitar proposta de renovação.",acao:"Minas Metálica: reajuste acima do IPCA. Shelter: interesse com novo escopo. BID de telhado em abertura paralela.",obs:"Telhado: aguardando retorno da Minas Metálica até 31/07. Shelter: aguardando carta-proposta.",replan:[]},
+  {id:7,resp:"Otavio",area:"Contratos",tipo:"Contrato/BID",crit:"Baixa",status:"Em andamento",prazo:"2026-07-23",abertura:"2026-07-01",concl:"",desc:"Enviar novamente os contratos aguardando assinatura do Mercado Livre.",acao:"Enviado pelo Otávio.",obs:"Aguardando responsável Meli assinar.",replan:[]},
+  {id:8,resp:"Diego",area:"Manutenção",tipo:"Contrato/BID",crit:"Média",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Revisar escopo do contrato de manutenção preventiva dos Bollards e reenviar proposta para validação.",acao:"Enviado para Pathus Engenharia incluir no escopo portaria.",obs:"",replan:[]},
+  {id:9,resp:"Diego/Renata",area:"Manutenção",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Cadastrar empresa Refordisel no Certronic e elaborar cronograma de atendimento para motor a diesel.",acao:"Refordisel em processo de cadastramento no Certronic. E-mails de cobrança enviados em 23/07 e 27/07. Sem retorno da empresa.",obs:"Aguardando posicionamento sobre cronograma.",replan:[]},
+  {id:10,resp:"Diego",area:"Portaria/Acesso",tipo:"Manutenção Corretiva",crit:"Média",status:"Em andamento",prazo:"2026-08-03",abertura:"2026-07-01",concl:"",desc:"Mapear atividades de correção e melhoria das eclusas e portaria. Instalar botoeiras de acionamento.",acao:"Vieira Manutenções: orçamento R$ 185.232,17. Duas empresas desistiram. Evotech com dúvidas. Iniciada cotação de botoeiras.",obs:"31/07: visita Só Portões. 30/07: visita Evoteck.",replan:[]},
+  {id:11,resp:"Diego",area:"Obras/Reforma",tipo:"Serviço Terceirizado",crit:"Alta",status:"Em andamento",prazo:"2026-09-01",abertura:"2026-07-01",concl:"",desc:"Planejar atividade de pintura a ser executada pela Leadec, prevista para setembro/outubro.",acao:"Funcionários liberados no Certronic pela empresa Aptar. Aguardando data definida pelo Mercado Livre.",obs:"Tinta com validade até junho/2028.",replan:[]},
+  {id:12,resp:"Log obras/Diego",area:"Manutenção",tipo:"Melhoria",crit:"Média",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Verificar pendências sobre o sistema de reuso e propor ações de melhoria.",acao:"Equipe LOG avaliou: execução conforme projeto. CP Solutions notificada para apresentar parecer técnico.",obs:"Aguardando retorno LOG obras junto à CP Solutions.",replan:[]},
+  {id:13,resp:"Diego",area:"Segurança/Incêndio",tipo:"Manutenção Preventiva",crit:"Alta",status:"Em andamento",prazo:"2026-08-15",abertura:"2026-07-01",concl:"",desc:"Elaborar plano de ação para sistema de incêndio, tratar relatório PD7, plano de treinamento e levantamento de materiais críticos.",acao:"Analisar relatórios PD7 recebidos em 28/07. Estruturar plano de treinamento para casa de bombas. Levantamento de materiais críticos para estoque mínimo.",obs:"",replan:[]},
+  {id:14,resp:"Diego",area:"Manutenção",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-03",abertura:"2026-07-01",concl:"",desc:"Verificar linha de vida do talude e do prédio, providenciar ações preventivas para período das chuvas.",acao:"E-mail enviado 22/07. Resposta 29/07 autorizando linha de vida provisória. Iniciado orçamento junto à 3QX.",obs:"",replan:[]},
+  {id:15,resp:"Diego",area:"Manutenção",tipo:"Melhoria",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Verificar monitoramento do talude por sensores ou drone.",acao:"Cotação em andamento, aguardando 2 orçamentos. MI2: implantação R$ 11.904,00; Monitoramento semestral: R$ 6.840,00.",obs:"",replan:[]},
+  {id:16,resp:"Log obras/Diego/Renata",area:"Obras/Reforma",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Regularização do piso interno dos galpões no setor RK.",acao:"Aguardando liberação do técnico de segurança no Certronic. Empresa Avanti com documentos vencidos, notificada em 20/07.",obs:"",replan:[]},
+  {id:17,resp:"Diego",area:"Portaria/Acesso",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Verificar motor da garra de tigre danificada na eclusa 3B.",acao:"Orçamento da troca do motor enviado à Natalia em 28/07/2026.",obs:"Aguardando aprovação do orçamento.",replan:[]},
+  {id:18,resp:"Diego",area:"Portaria/Acesso",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Em andamento",prazo:"2026-08-05",abertura:"2026-07-01",concl:"",desc:"Verificar sistema de garra de tigre e programar preventiva para período chuvoso.",acao:"Verificação junto à Shelter em 10/07. Programado para agosto: desmontagem, lubrificação e limpeza.",obs:"Aguardando orçamento da empresa Shelter.",replan:[]},
+  {id:19,resp:"Diego",area:"Obras/Reforma",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Retrofit das caixas de gordura – PRECEND.",acao:"Obra iniciada em junho/2026. Valas e radier executados em julho. Conexões externas instaladas. Aguardando liberação do Mercado Livre para conexões internas do restaurante.",obs:"",replan:[]},
+  {id:20,resp:"Diego",area:"Manutenção",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Em andamento",prazo:"2026-08-08",abertura:"2026-07-01",concl:"",desc:"Avaliar relatório do Trafo 04.",acao:"Garantia Itaipu vencida. Iniciado processo de cotação para duas análises laboratoriais independentes do óleo isolante. Previsão de execução em setembro.",obs:"",replan:[]},
+  {id:21,resp:"Diego",area:"Restaurante",tipo:"Melhoria",crit:"Média",status:"Em andamento",prazo:"2026-08-08",abertura:"2026-07-01",concl:"",desc:"Marco zero do restaurante pós-inauguração: levantamento e execução de melhorias.",acao:"Inspeção com Mercado Livre em 22/07. Ralos, torneiras e tomadas substituídos. Plano de ação sendo elaborado com Débora (Meli).",obs:"",replan:[]},
+  {id:22,resp:"Diego",area:"Contratos",tipo:"Contrato/BID",crit:"Média",status:"Em andamento",prazo:"2026-08-03",abertura:"2026-07-01",concl:"",desc:"Refazer BID para contratação do serviço de manutenção de portaria, excluindo a empresa Shelter.",acao:"Iniciada verificação de empresas parceiras em 22/07 com novo escopo apresentado.",obs:"",replan:[]},
+  {id:23,resp:"Diego",area:"Restaurante",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Não iniciado",prazo:"2026-08-08",abertura:"2026-07-01",concl:"",desc:"Instalar fotocélula no circuito do restaurante externo.",acao:"Atividade não iniciada.",obs:"",replan:[]},
+  {id:24,resp:"Diego",area:"Segurança/Incêndio",tipo:"Manutenção Preventiva",crit:"Baixa",status:"Não iniciado",prazo:"2026-08-07",abertura:"2026-07-01",concl:"",desc:"Realizar levantamento sobre mudança do registro globo angular de incêndio na área do mezanino.",acao:"Atividade não iniciada.",obs:"",replan:[]},
+  {id:25,resp:"Diego",area:"Segurança/Incêndio",tipo:"Manutenção Corretiva",crit:"Baixa",status:"Em andamento",prazo:"2026-07-31",abertura:"2026-07-01",concl:"",desc:"Trocar válvula registro globo de incêndio danificado próximo ao RK.",acao:"3 orçamentos: Luz Service, Fire Force e ProgeIncêndio. Menor valor: Fire Force. Enviado à Natalia em 24/07 para aprovação.",obs:"",replan:[]},
+];
+
+// ═══════════════════════════════════════════════════════
+// DB STATE
+// ═══════════════════════════════════════════════════════
+let DB = [];
+
+function freshSeed(){
+  return SEED.map(d => ({replan:[], obs:'', concl:'', abertura:'', ...d}));
+}
+function saveData(){} // no-op — all saves go through Firebase directly
+
+// ── Load from Firestore ───────────────────────────────
+async function loadFromDB(){
+  // Show data immediately from SEED while Firebase loads
+  DB = freshSeed();
+  renderAll();
+  setLoading(true);
+
+  // Race Firebase against a 10s timeout
+  const timeout = new Promise((_,reject) =>
+    setTimeout(() => reject(new Error('Timeout — verifique as regras do Firestore')), 10000)
+  );
+
+  try {
+    const rows = await Promise.race([fbLoad(), timeout]);
+
+    if(rows.length === 0){
+      // First run — write SEED to Firestore
+      showToast('Primeiro acesso: gravando dados no Firebase…', '#2E86D4');
+      DB = [];
+      let ordem = 1;
+      for(const d of SEED){
+        const rec = await fbAdd({...d, ordem, replan:[]});
+        DB.push({...d, ...rec, id:ordem});
+        ordem++;
+      }
+      showToast('✓ ' + DB.length + ' registros gravados no Firebase!', '#1EB564');
+    } else {
+      DB = rows;
+      showToast('✓ ' + DB.length + ' registros carregados do Firebase', '#1EB564');
+    }
+    renderAll();
+  } catch(e){
+    console.error('Firebase error:', e);
+    showToast('⚠️ Firebase: ' + e.message + ' — usando dados locais', '#E8632A');
+    DB = freshSeed();
+    renderAll();
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ── Loading overlay ───────────────────────────────────
+function setLoading(on){
+  let el = document.getElementById('loading-overlay');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'loading-overlay';
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(15,39,68,.65);z-index:9000;display:flex;align-items:center;justify-content:center;';
+    el.innerHTML = '<div style="background:#fff;border-radius:14px;padding:24px 36px;font-family:Inter,sans-serif;font-size:14px;font-weight:600;color:#0F2744;display:flex;align-items:center;gap:12px"><span style="font-size:22px">⏳</span> Sincronizando com o banco…</div>';
+    document.body.appendChild(el);
+  }
+  el.style.display = on ? 'flex' : 'none';
+}
+
+// ── Export backup ─────────────────────────────────────
+function exportData(){
+  const json = JSON.stringify(DB, null, 2);
+  const blob = new Blob([json], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'plano_acao_backup.json';
+  a.click();
+  showToast('Backup exportado ✓');
+}
+
+// ── Import backup ─────────────────────────────────────
+function importData(){
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.json';
+  input.onchange = e => {
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if(!Array.isArray(parsed)) throw new Error('formato inválido');
+        if(!confirm('Importar ' + parsed.length + ' registros? Isso substituirá TODOS os dados atuais.')) return;
+        setLoading(true);
+        for(const d of DB) await fbDel(d);
+        DB = [];
+        let ordem = 1;
+        for(const d of parsed){
+          const rec = await fbAdd({...d, ordem, _ref:undefined});
+          DB.push({...d, ...rec, id:ordem});
+          ordem++;
+        }
+        renderAll();
+        showToast('Importados ' + DB.length + ' registros ✓', '#1EB564');
+      } catch(err){ showToast('⚠️ Erro: ' + err.message, '#D93535'); }
+      finally{ setLoading(false); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ── Reset to seed ─────────────────────────────────────
+function resetData(){
+  if(!confirm('Restaurar dados originais? Isso apagará TODOS os dados atuais no banco.')) return;
+  (async()=>{
+    setLoading(true);
+    try {
+      for(const d of DB) await fbDel(d);
+      DB = [];
+      let ordem = 1;
+      for(const d of SEED){
+        const rec = await fbAdd({...d, ordem, replan:[]});
+        DB.push({...d, ...rec, id:ordem});
+        ordem++;
+      }
+      renderAll(); showToast('Banco restaurado ✓');
+    } catch(e){ showToast('Erro: ' + e.message, '#D93535'); }
+    finally{ setLoading(false); }
+  })();
+}
+
+// ── Load from Supabase (called on init and after changes) ─
+async function loadFromDB(){
+  setLoading(true);
+  try{
+    const rows = await sbGet();
+    DB = rows.map(fromRow);
+    if(DB.length === 0){
+      // First run — seed the database
+      showToast('Primeiro acesso: carregando dados iniciais…','#2E86D4');
+      for(const d of SEED){
+        const inserted = await sbInsert(d);
+        DB.push(inserted);
+      }
+      showToast('Banco inicializado com '+DB.length+' registros ✓','#1EB564');
+    }
+    renderAll();
+  } catch(e){
+    showToast('⚠️ Erro ao conectar: '+e.message,'#D93535');
+    DB = freshSeed();
+    renderAll();
+  } finally { setLoading(false); }
+}
+
+function freshSeed(){
+  return SEED.map(d=>({replan:[],obs:'',concl:'',abertura:'',...d}));
+}
+
+// saveData is now async — callers that need it use await saveRecord()
+function saveData(){} // kept for compatibility, actual saves use sbUpdate/sbInsert
+
+// ── Loading overlay ─────────────────────────────────────
+function setLoading(on){
+  let el = document.getElementById('loading-overlay');
+  if(!el){ el=document.createElement('div'); el.id='loading-overlay';
+    el.style.cssText='position:fixed;inset:0;background:rgba(15,39,68,.7);z-index:9000;display:flex;align-items:center;justify-content:center;';
+    el.innerHTML='<div style="background:#fff;border-radius:12px;padding:24px 32px;font-family:Inter,sans-serif;font-size:14px;font-weight:600;color:#0F2744">⏳ Sincronizando…</div>';
+    document.body.appendChild(el);
+  }
+  el.style.display = on ? 'flex' : 'none';
+}
+
+// setup banner removed
+
+// ── Export / Import (backup) ─────────────────────────────
+function exportData(){
+  const json = JSON.stringify(DB, null, 2);
+  const blob = new Blob([json], {type:'application/json'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='plano_acao_backup.json'; a.click();
+  showToast('Backup exportado ✓');
+}
+function importData(){
+  const input = document.createElement('input');
+  input.type='file'; input.accept='.json';
+  input.onchange = e => {
+    const file=e.target.files[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload = async ev => {
+      try{
+        const parsed=JSON.parse(ev.target.result);
+        if(!Array.isArray(parsed)) throw new Error();
+        if(!confirm('Importar '+parsed.length+' registros? Isso substituirá todos os dados no banco.')) return;
+        setLoading(true);
+        // Delete all existing rows then re-insert
+        for(const d of DB) await sbDelete(d.id);
+        DB=[];
+        for(const d of parsed){
+          const ins=await sbInsert({...d,id:undefined});
+          DB.push(ins);
+        }
+        renderAll(); showToast('Importados '+DB.length+' registros ✓','#1EB564');
+      } catch(err){ showToast('⚠️ Erro na importação: '+err.message,'#D93535'); }
+      finally{ setLoading(false); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+function resetData(){
+  if(confirm('Restaurar dados originais no banco? Isso apagará TODOS os dados atuais.')){
+    (async()=>{
+      setLoading(true);
+      try{
+        for(const d of DB) await sbDelete(d.id);
+        DB=[];
+        for(const d of SEED){ const ins=await sbInsert(d); DB.push(ins); }
+        renderAll(); showToast('Banco restaurado ✓');
+      } catch(e){ showToast('Erro: '+e.message,'#D93535'); }
+      finally{ setLoading(false); }
+    })();
+  }
+}
+const TODAY = new Date('2026-07-30');
+
+function nextId(){return DB.length?Math.max(...DB.map(d=>d.id||0))+1:1;}
+function diasAtraso(d){
+  if(d.status==='Concluído'||d.status==='Descontinuado')return 0;
+  if(!d.prazo)return 0;
+  const diff=Math.floor((TODAY-new Date(d.prazo))/86400000);
+  return diff>0?diff:0;
+}
+
+// ═══════════════════════════════════════════════════════
+// FILTERS
+// ═══════════════════════════════════════════════════════
+const filters={resp:'Todos',status:'Todos',area:'Todos',crit:'Todos'};
+function setFilter(key,val){
+  filters[key]=val;
+  document.querySelectorAll('.filter-pill').forEach(b=>{
+    const fn=b.getAttribute('onclick')||'';
+    if(fn.includes(`'${key}'`)&&fn.includes(`'${val}'`))b.classList.add('active');
+    else if(fn.includes(`'${key}'`))b.classList.remove('active');
+  });
+  renderAll();
+}
+function applyFilters(arr){
+  return arr.filter(d=>{
+    if(filters.resp!=='Todos'&&d.resp!==filters.resp)return false;
+    if(filters.area!=='Todos'&&d.area!==filters.area)return false;
+    if(filters.crit!=='Todos'&&d.crit!==filters.crit)return false;
+    if(filters.status==='Atrasado'){if(diasAtraso(d)===0)return false;}
+    else if(filters.status!=='Todos'&&d.status!==filters.status)return false;
+    return true;
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════
+function switchTab(name){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick').includes(`'${name}'`)));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`tab-${name}`));
+  if(name==='concluidos') renderConcluidos();
+}
+
+// ═══════════════════════════════════════════════════════
+// SORT
+// ═══════════════════════════════════════════════════════
+const sortState={pend:{col:-1,asc:true},todos:{col:-1,asc:true},concl:{col:-1,asc:true}};
+function sortT(tbl,col){
+  const s=sortState[tbl];s.asc=(s.col===col)?!s.asc:true;s.col=col;
+  tbl==='pend'?renderPendentes():renderTodos();
+}
+function sorted(rows,tbl,getters){
+  const s=sortState[tbl];if(s.col<0)return rows;
+  return[...rows].sort((a,b)=>{
+    const va=getters[s.col](a),vb=getters[s.col](b);
+    return s.asc?(va<vb?-1:va>vb?1:0):(va<vb?1:va>vb?-1:0);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
+function fmtDate(s){if(!s)return'—';const[y,m,d]=s.split('-');return`${d}/${m}/${y}`;}
+function farol(d){
+  if(d.status==='Concluído')return'🟢';
+  if(d.status==='Descontinuado')return'⛔';
+  if(diasAtraso(d)>0)return'🔴';
+  if(d.status==='Não iniciado')return'⚪';
+  return'🟡';
+}
+function statusBadge(d){
+  if(d.status==='Concluído')return`<span class="sbadge concl">✅ Concluído</span>`;
+  if(d.status==='Descontinuado')return`<span class="sbadge disc">🚫 Descontinuado</span>`;
+  if(diasAtraso(d)>0)return`<span class="sbadge atr">🔴 Atrasado</span>`;
+  if(d.status==='Não iniciado')return`<span class="sbadge naoinic">⏳ Não iniciado</span>`;
+  return`<span class="sbadge and">🔄 Em andamento</span>`;
+}
+function critBadge(c){
+  const cls=c==='Alta'?'alta':c==='Média'?'media':'baixa';
+  return`<span class="cbadge ${cls}">${c}</span>`;
+}
+function acaoCell(d,prefix){
+  const SHORT=90;const id=`ac-${prefix}-${d.id}`;
+  if(d.acao.length<=SHORT)return`<div style="font-size:10px;color:var(--muted);line-height:1.4">${d.acao}</div>`;
+  const short=d.acao.substring(0,SHORT)+'…';
+  return`<div id="${id}" style="font-size:10px;color:var(--muted);line-height:1.4">
+    <span class="acao-short">${short}</span>
+    <span class="acao-full">${d.acao}</span>
+    <button class="acao-toggle" data-action="expand" data-target="${id}">ver mais</button>
+  </div>`;
+}
+function replanTag(d){
+  if(!d.replan||d.replan.length===0)return'';
+  return`<span class="replan-tag">↻ Replanejado ${d.replan.length}x</span>`;
+}
+function actionBtns(d){
+  return`<div class="btn-actions">
+    <button class="act-btn"        data-action="edit" data-id="${d.id}">✏️ Editar</button>
+    <button class="act-btn danger" data-action="del"  data-id="${d.id}">🗑️ Excluir</button>
+  </div>`;
+}
+function showDiag(){
+  const panel = document.getElementById('debug-panel');
+  const log   = document.getElementById('debug-log');
+  if(!panel||!log) return;
+  panel.style.display = 'block';
+  log.innerHTML = '';
+  dbg('=== ESTADO DO BANCO ===', '#FFD700');
+  dbg('DB.length = ' + DB.length);
+  DB.forEach(d => {
+    const color = d.status==='Concluído' ? '#00FF88' : d.status==='Descontinuado' ? '#CC88FF' : '#7FFF7F';
+    dbg('#'+d.id+' ['+d.status+'] concl="'+d.concl+'" prazo='+d.prazo+' resp='+d.resp, color);
+  });
+  dbg('_editId = ' + _editId, '#FFD700');
+}
+function showToast(msg,col='#1EB564'){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.background=col;
+  t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);
+}
+
+// ═══════════════════════════════════════════════════════
+// MODALS
+// ═══════════════════════════════════════════════════════
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open');}));
+
+// Event delegation for dynamically generated table buttons (data-action)
+document.addEventListener('click', function(e){
+  const btn = e.target.closest('[data-action]');
+  if(!btn) return;
+  const action = btn.getAttribute('data-action');
+  const id     = parseInt(btn.getAttribute('data-id'), 10);
+  dbg('click delegation: action='+action+' id='+id+' type='+typeof id, '#AAD4FF');
+  if(action === 'edit')   openEdit(id);
+  if(action === 'del')    openDel(id);
+  if(action === 'expand'){
+    const target = btn.getAttribute('data-target');
+    const el = document.getElementById(target);
+    if(el){ el.classList.toggle('expanded'); btn.textContent = el.classList.contains('expanded') ? 'ver menos' : 'ver mais'; }
+  }
+});
+
+let _editId=null;
+function openNew(){
+  _editId=null;
+  document.getElementById('modal-form-title').textContent='➕ Nova Ação';
+  ['f-resp','f-area','f-tipo','f-crit','f-status','f-prazo','f-abertura','f-concl','f-desc','f-acao','f-obs','f-replan-motivo','f-disc-just'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  document.getElementById('f-abertura').value='2026-07-30';
+  document.getElementById('f-status').value='Não iniciado';
+  const grpReplan=document.getElementById('grp-replan');
+  const grpDisc=document.getElementById('grp-disc-just');
+  const conclReq=document.getElementById('concl-req');
+  if(grpReplan) grpReplan.style.display='none';
+  if(grpDisc) grpDisc.style.display='none';
+  if(conclReq) conclReq.style.display='none';
+  openModal('modal-form');
+}
+function openEdit(id){
+  _editId=id;
+  const d=DB.find(x=>x.id===id);
+  dbg('>>> openEdit('+id+') _editId agora='+_editId+' | tipo='+typeof id+' | encontrado='+(!!d), '#FFD700');
+  if(!d){ dbg('ERRO: id '+id+' não encontrado no DB!','#FF6B6B'); return; }
+  document.getElementById('modal-form-title').textContent=`✏️ Editar Ação #${id}`;
+  document.getElementById('f-resp').value=d.resp||'';
+  document.getElementById('f-area').value=d.area||'';
+  document.getElementById('f-tipo').value=d.tipo||'';
+  document.getElementById('f-crit').value=d.crit||'';
+  document.getElementById('f-status').value=d.status||'';
+  document.getElementById('f-prazo').value=d.prazo||'';
+  document.getElementById('f-abertura').value=d.abertura||'';
+  document.getElementById('f-concl').value=d.concl||'';
+  document.getElementById('f-desc').value=d.desc||'';
+  document.getElementById('f-acao').value=d.acao||'';
+  document.getElementById('f-obs').value=d.obs||'';
+  // Reset conditional fields
+  const grpReplan=document.getElementById('grp-replan');
+  const grpDisc=document.getElementById('grp-disc-just');
+  const fReplan=document.getElementById('f-replan-motivo');
+  const fDisc=document.getElementById('f-disc-just');
+  if(grpReplan){grpReplan.style.display='none';}
+  if(grpDisc){grpDisc.style.display=(d.status==='Descontinuado')?'grid':'none';}
+  if(fReplan) fReplan.value='';
+  if(fDisc) fDisc.value='';
+  // Show concl req marker if already concluído
+  const conclReq=document.getElementById('concl-req');
+  if(conclReq) conclReq.style.display=(d.status==='Concluído')?'inline':'none';
+  openModal('modal-form');
+}
+function onPrazoChange(){
+  if(!_editId) return; // only show replan field when editing
+  const d=DB.find(x=>x.id===_editId);if(!d)return;
+  const newPrazo=document.getElementById('f-prazo').value;
+  const st=document.getElementById('f-status').value;
+  const grp=document.getElementById('grp-replan');
+  if(grp) grp.style.display=(newPrazo&&d.prazo&&newPrazo!==d.prazo&&st!=='Concluído'&&st!=='Descontinuado')?'grid':'none';
+}
+function onStatusChange(){
+  const st=document.getElementById('f-status').value;
+  // Show/hide conclusion date requirement marker
+  const conclReq=document.getElementById('concl-req');
+  if(conclReq) conclReq.style.display=(st==='Concluído')?'inline':'none';
+  // Auto-fill conclusion date if switching to Concluído and field is empty
+  if(st==='Concluído'){
+    const fc=document.getElementById('f-concl');
+    if(fc&&!fc.value) fc.value='2026-07-30';
+  }
+  // Clear conclusion date if switching away from Concluído
+  if(st==='Em andamento'||st==='Não iniciado'){
+    const fc=document.getElementById('f-concl');
+    if(fc) fc.value='';
+  }
+  // Show disc justification box
+  const discBox=document.getElementById('grp-disc-just');
+  if(discBox) discBox.style.display=(st==='Descontinuado')?'grid':'none';
+}
+function onConclChange(){
+  const fc=document.getElementById('f-concl');
+  const fs=document.getElementById('f-status');
+  if(!fc||!fs) return;
+  if(fc.value && fs.value!=='Concluído' && fs.value!=='Descontinuado'){
+    fs.value='Concluído';
+    // Flash the select green to show it changed
+    fs.style.borderColor='#1EB564';
+    fs.style.background='#E8F7EF';
+    setTimeout(()=>{fs.style.borderColor='';fs.style.background='';},1800);
+    onStatusChange();
+  }
+  if(!fc.value && fs.value==='Concluído'){
+    fs.value='Em andamento';
+    onStatusChange();
+  }
+}
+async function saveForm(){
+  dbg('>>> saveForm() chamado | _editId='+_editId+' | tipo='+typeof _editId, '#FFD700');
+
+  // ── 1. Read all field values ──────────────────────────────────────────────
+  const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const resp      = get('f-resp');
+  const area      = get('f-area');
+  const tipo      = get('f-tipo');
+  const crit      = get('f-crit');
+  const desc      = get('f-desc');
+  const prazo     = get('f-prazo');
+  const abertura  = get('f-abertura');
+  const acao      = get('f-acao');
+  const obs_raw   = get('f-obs');
+  const concl     = get('f-concl');
+  const discJust  = get('f-disc-just');
+  const replanMot = get('f-replan-motivo');
+  let   statusSel = get('f-status');
+
+  dbg('Campos: _editId='+_editId+' | status="'+statusSel+'" | concl="'+concl+'"');
+  dbg('resp="'+resp+'" area="'+area+'" tipo="'+tipo+'" crit="'+crit+'" prazo="'+prazo+'"');
+
+  // ── 2. Required field validation ─────────────────────────────────────────
+  if(!resp || !area || !tipo || !crit || !prazo || !desc){
+    dbg('BLOQUEADO: campo obrigatório vazio — resp:'+!!resp+' area:'+!!area+' tipo:'+!!tipo+' crit:'+!!crit+' prazo:'+!!prazo+' desc:'+!!desc, '#FF6B6B');
+    showToast('⚠️ Preencha: Responsável, Área, Tipo, Criticidade, Prazo e Descrição','#D93535');
+    return;
+  }
+  if(!statusSel){
+    dbg('BLOQUEADO: status não selecionado', '#FF6B6B');
+    showToast('⚠️ Selecione um Status','#D93535');
+    return;
+  }
+  dbg('Validação básica: OK');
+
+  // ── 3. Derive final status ────────────────────────────────────────────────
+  let finalStatus = statusSel;
+  if(concl && statusSel !== 'Descontinuado'){
+    finalStatus = 'Concluído';
+    dbg('Regra A: concl preenchido → finalStatus=Concluído');
+  } else if(statusSel === 'Concluído' && !concl){
+    dbg('BLOQUEADO Regra B: status=Concluído mas sem data de conclusão', '#FF6B6B');
+    showToast('⚠️ Informe a Data de Conclusão','#D93535');
+    return;
+  } else if(statusSel === 'Descontinuado' && !discJust){
+    dbg('BLOQUEADO Regra C: Descontinuado sem justificativa', '#FF6B6B');
+    showToast('⚠️ Informe a justificativa','#D93535');
+    return;
+  }
+  dbg('finalStatus="'+finalStatus+'"');
+
+  // ── 4. Build obs string ───────────────────────────────────────────────────
+  let obs = obs_raw;
+  if(finalStatus === 'Descontinuado' && discJust){
+    const existing = _editId ? (DB.find(x=>x.id===_editId)||{}).status : null;
+    if(existing !== 'Descontinuado'){
+      obs = (obs ? obs+' | ' : '')+'[Descontinuado em 30/07/2026: '+discJust+']';
+    }
+  }
+
+  // ── 5. Persist ────────────────────────────────────────────────────────────
+  if(_editId){
+    const d = DB.find(x => x.id === _editId);
+    dbg('Modo EDIÇÃO: _editId='+_editId+' | DB.length='+DB.length+' | encontrado='+!!d);
+    if(!d){
+      dbg('ERRO: registro não encontrado no DB!', '#FF6B6B');
+      showToast('Erro: ação não encontrada','#D93535');
+      return;
+    }
+
+    if(replanMot && d.prazo && d.prazo !== prazo && d.status !== 'Concluído' && d.status !== 'Descontinuado'){
+      if(!d.replan) d.replan = [];
+      d.replan.push({de:d.prazo, para:prazo, motivo:replanMot, data:'2026-07-30'});
+    }
+
+    Object.assign(d, { resp, area, tipo, crit, status:finalStatus, prazo, abertura, concl, desc, acao, obs });
+    closeModal('modal-form');
+    setLoading(true);
+    try {
+      await fbUpdate(d);
+      renderAll();
+      showToast('Ação #'+_editId+' atualizada ✓');
+      if(finalStatus==='Concluído'){ switchTab('concluidos'); showToast('✅ Movida para "Concluídos".','#1EB564'); }
+      else if(finalStatus==='Descontinuado'){ switchTab('todos'); showToast('🚫 Descontinuada.','#6C4DE8'); }
+    } catch(e){ showToast('⚠️ Erro ao salvar: '+e.message,'#D93535'); }
+    finally { setLoading(false); }
+  } else {
+    const ordem = nextId();
+    const newRec = { resp, area, tipo, crit, status:finalStatus, prazo,
+                     abertura:abertura||'2026-07-30', concl, desc, acao, obs, replan:[], id:ordem, ordem };
+    closeModal('modal-form');
+    setLoading(true);
+    try {
+      const saved = await fbAdd(newRec);
+      DB.push({...newRec, ...saved});
+      renderAll();
+      showToast('Nova ação criada ✓');
+    } catch(e){ showToast('⚠️ Erro ao criar: '+e.message,'#D93535'); }
+    finally { setLoading(false); }
+  }
+}
+
+let _replanId=null;
+function openReplan(id){
+  _replanId=id;const d=DB.find(x=>x.id===id);
+  document.getElementById('replan-id-label').textContent=`#${id} — ${d.desc.substring(0,60)}…`;
+  document.getElementById('replan-prazo').value=d.prazo||'';
+  document.getElementById('replan-motivo').value='';
+  openModal('modal-replan');
+}
+function saveReplan(){
+  const novoPrazo=document.getElementById('replan-prazo').value;
+  const motivo=document.getElementById('replan-motivo').value.trim();
+  if(!novoPrazo||!motivo){showToast('⚠️ Preencha o novo prazo e o motivo','#D93535');return;}
+  const d=DB.find(x=>x.id===_replanId);if(!d)return;
+  if(!d.replan)d.replan=[];
+  d.replan.push({de:d.prazo,para:novoPrazo,motivo,data:'2026-07-30'});
+  d.prazo=novoPrazo;
+  closeModal('modal-replan');
+  setLoading(true);
+  (async()=>{
+    try{
+      await fbUpdate(d);
+      renderAll(); showToast('Prazo da ação #'+_replanId+' atualizado ✓');
+    } catch(e){ showToast('⚠️ Erro: '+e.message,'#D93535'); }
+    finally{ setLoading(false); }
+  })();
+}
+
+let _conclId=null;
+function openConcl(id){
+  _conclId=id;const d=DB.find(x=>x.id===id);
+  document.getElementById('concl-id-label').textContent=`#${id} — ${d.desc.substring(0,60)}…`;
+  document.getElementById('concl-data').value='2026-07-30';
+  document.getElementById('concl-obs').value='';
+  openModal('modal-concl');
+}
+function saveConcl(){
+  const data=document.getElementById('concl-data').value;
+  if(!data){showToast('⚠️ Informe a data de conclusão','#D93535');return;}
+  const d=DB.find(x=>x.id===_conclId);if(!d)return;
+  d.status='Concluído';d.concl=data;
+  const obs=document.getElementById('concl-obs').value.trim();
+  if(obs)d.obs=(d.obs?d.obs+' | ':'')+`[Conclusão: ${obs}]`;
+  saveData();closeModal('modal-concl');renderAll();
+  showToast(`Ação #${_conclId} marcada como concluída ✅`,'#1EB564');
+}
+
+let _discId=null;
+function openDisc(id){
+  _discId=id;const d=DB.find(x=>x.id===id);
+  document.getElementById('disc-id-label').textContent=`#${id} — ${d.desc.substring(0,60)}…`;
+  document.getElementById('disc-motivo').value='';
+  openModal('modal-disc');
+}
+function saveDisc(){
+  const motivo=document.getElementById('disc-motivo').value.trim();
+  if(!motivo){showToast('⚠️ Informe a justificativa','#D93535');return;}
+  const d=DB.find(x=>x.id===_discId);if(!d)return;
+  d.status='Descontinuado';
+  d.obs=(d.obs?d.obs+' | ':'')+`[Descontinuado em 30/07/2026: ${motivo}]`;
+  saveData();closeModal('modal-disc');renderAll();
+  showToast(`Ação #${_discId} descontinuada 🚫`,'#6C4DE8');
+}
+
+let _delId=null;
+function openDel(id){
+  _delId=id;const d=DB.find(x=>x.id===id);
+  document.getElementById('del-id-label').textContent=`#${id} — ${d.desc.substring(0,60)}…`;
+  openModal('modal-del');
+}
+function confirmDel(){
+  const d = DB.find(x=>x.id===_delId);
+  if(!d) return;
+  closeModal('modal-del');
+  setLoading(true);
+  (async()=>{
+    try{
+      await fbDel(d);
+      DB = DB.filter(x=>x.id !== _delId);
+      renderAll(); showToast('Ação #'+_delId+' excluída 🗑️','#D93535');
+    } catch(e){ showToast('⚠️ Erro ao excluir: '+e.message,'#D93535'); }
+    finally{ setLoading(false); }
+  })();
+}
+
+// ═══════════════════════════════════════════════════════
+// CHARTS
+// ═══════════════════════════════════════════════════════
+let donutC,critC,tipoC,stackedC;
+function mkDonut(vals){
+  const ctx=document.getElementById('donutChart').getContext('2d');
+  if(donutC)donutC.destroy();
+  donutC=new Chart(ctx,{type:'doughnut',data:{labels:['Concluído','Em andamento','Atrasado','Não iniciado','Descontinuado'],datasets:[{data:vals,backgroundColor:['#1EB564','#F5A623','#D93535','#AAB8CC','#6C4DE8'],borderWidth:3,borderColor:'#fff',hoverOffset:6}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label}: ${c.raw}`}}}}});
+}
+function mkCrit(vals,labs){
+  const ctx=document.getElementById('critChart').getContext('2d');
+  if(critC)critC.destroy();
+  critC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{data:vals,backgroundColor:['#FDEBEB','#FEF6E7','#E8F7EF'],borderColor:['#D93535','#F5A623','#1EB564'],borderWidth:2,borderRadius:8,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw} chamados`}}},scales:{x:{grid:{display:false},ticks:{font:{size:11,family:'Inter',weight:'600'}}},y:{grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true}}}});
+}
+function mkTipo(vals,labs){
+  const ctx=document.getElementById('tipoChart').getContext('2d');
+  if(tipoC)tipoC.destroy();
+  tipoC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{data:vals,backgroundColor:['#2E86D4','#1EB564','#6C4DE8','#F5A623','#0E9F8E','#E8632A'],borderRadius:6,borderSkipped:false}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw} chamados`}}},scales:{x:{grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true},y:{grid:{display:false},ticks:{font:{size:10}}}}}});
+}
+function mkPont(vals,labs){
+  const ctx=document.getElementById('pontChart');if(!ctx)return;
+  if(window._pontC)window._pontC.destroy();
+  window._pontC=new Chart(ctx.getContext('2d'),{
+    type:'bar',
+    data:{
+      labels:labs,
+      datasets:[
+        {label:'No prazo ou antes',data:vals[0],backgroundColor:'#1EB564',borderRadius:6,borderSkipped:false},
+        {label:'Com atraso',       data:vals[1],backgroundColor:'#D93535',borderRadius:6,borderSkipped:false},
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:true,position:'bottom',labels:{font:{size:10,family:'Inter'},boxWidth:10,padding:10}},
+        tooltip:{callbacks:{label:c=>` ${c.raw} ação(ões)`}}
+      },
+      scales:{
+        x:{grid:{display:false},ticks:{font:{size:10,family:'Inter'}}},
+        y:{grid:{color:'#EEF1F7'},ticks:{font:{size:10},stepSize:1},beginAtZero:true}
+      }
+    }
+  });
+}
+function mkStacked(d,labs){
+  const ctx=document.getElementById('stackedChart').getContext('2d');
+  if(stackedC)stackedC.destroy();
+  stackedC=new Chart(ctx,{type:'bar',data:{labels:labs,datasets:[{label:'Concluído',data:d[0],backgroundColor:'#1EB564',stack:'s'},{label:'Em andamento',data:d[1],backgroundColor:'#F5A623',stack:'s'},{label:'Não iniciado',data:d[2],backgroundColor:'#AAB8CC',borderRadius:4,stack:'s'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'bottom',labels:{font:{size:10,family:'Inter'},boxWidth:10,padding:10}}},scales:{x:{stacked:true,grid:{display:false},ticks:{font:{size:10}}},y:{stacked:true,grid:{color:'#EEF1F7'},ticks:{font:{size:10}},beginAtZero:true}}}});
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER DASHBOARD
+// ═══════════════════════════════════════════════════════
+function renderDashboard(){
+  const F=applyFilters(DB.filter(d=>d.status!=='Descontinuado'));
+  const ALL=applyFilters(DB);
+  const n=F.length,concl=F.filter(d=>d.status==='Concluído').length;
+  const andando=F.filter(d=>d.status==='Em andamento').length;
+  const naoinic=F.filter(d=>d.status==='Não iniciado').length;
+  const atr=F.filter(d=>diasAtraso(d)>0).length;
+  const disc=ALL.filter(d=>d.status==='Descontinuado').length;
+  const pct=n?Math.round(concl/n*100):0;
+  const total=ALL.length;
+
+  document.getElementById('kpi-total').textContent=total;
+  document.getElementById('kpi-total-sub').textContent='base completa';
+  document.getElementById('kpi-concl').textContent=concl;
+  document.getElementById('kpi-and').textContent=andando;
+  document.getElementById('kpi-naoinic').textContent=naoinic;
+  document.getElementById('kpi-atr').textContent=atr;
+  document.getElementById('kpi-pct').textContent=pct+'%';
+  document.getElementById('kpi-concl-pct').textContent=n?Math.round(concl/n*100)+'% do total':'—';
+  document.getElementById('kpi-and-pct').textContent=n?Math.round(andando/n*100)+'% do total':'—';
+  document.getElementById('kpi-naoinic-pct').textContent=n?Math.round(naoinic/n*100)+'% do total':'—';
+  document.getElementById('kpi-atr-pct').textContent=n?Math.round(atr/n*100)+'% do total':'—';
+
+  document.getElementById('donut-center-val').textContent=n;
+  mkDonut([concl,andando,atr,naoinic,disc]);
+  document.getElementById('leg-concl').textContent=`${concl} (${n?Math.round(concl/n*100):0}%)`;
+  document.getElementById('leg-and').textContent=`${andando} (${n?Math.round(andando/n*100):0}%)`;
+  document.getElementById('leg-atr').textContent=`${atr} (${n?Math.round(atr/n*100):0}%)`;
+  document.getElementById('leg-naoinic').textContent=`${naoinic} (${n?Math.round(naoinic/n*100):0}%)`;
+  document.getElementById('leg-disc').textContent=`${disc}`;
+
+  const areas=["Manutenção","Portaria/Acesso","Contratos","Obras/Reforma","Restaurante","Segurança/Incêndio"];
+  const areaColors=['#2E86D4','#6C4DE8','#0E9F8E','#E8632A','#F5A623','#D93535'];
+  const areaCounts=areas.map(a=>F.filter(d=>d.area===a).length);
+  const areaMax=Math.max(...areaCounts,1);
+  document.getElementById('area-bars').innerHTML=areas.map((a,i)=>{
+    const c=areaCounts[i],w=Math.round(c/areaMax*100);
+    return`<div><div class="pbar-info"><span class="pbar-name">${a}</span><span class="pbar-val" style="color:${areaColors[i]}">${c}</span></div><div class="pbar-track"><div class="pbar-fill" style="width:${w}%;background:${areaColors[i]}"></div></div></div>`;
+  }).join('');
+
+  mkCrit(["Alta","Média","Baixa"].map(c=>F.filter(d=>d.crit===c).length),["Alta","Média","Baixa"]);
+  const tipos=["Manutenção Corretiva","Manutenção Preventiva","Contrato/BID","Serviço Terceirizado","Renovação Contratual","Melhoria"];
+  mkTipo(tipos.map(t=>F.filter(d=>d.tipo===t).length),["Corretiva","Preventiva","Contrato/BID","Serviço 3°","Renovação","Melhoria"]);
+  const crits=["Alta","Média","Baixa"];
+  mkStacked([crits.map(c=>F.filter(d=>d.crit===c&&d.status==='Concluído').length),crits.map(c=>F.filter(d=>d.crit===c&&d.status==='Em andamento').length),crits.map(c=>F.filter(d=>d.crit===c&&d.status==='Não iniciado').length)],crits);
+
+  // ── Pontualidade chart ──
+  const conclItems=DB.filter(d=>d.status==='Concluído'&&d.concl&&d.prazo);
+  // no prazo = concl <= prazo original (before any replan)
+  const noPrazo=conclItems.filter(d=>{
+    const prazoOriginal=(d.replan&&d.replan.length)?d.replan[0].de:d.prazo;
+    return d.concl<=prazoOriginal;
+  }).length;
+  const comAtraso=conclItems.filter(d=>{
+    const prazoOriginal=(d.replan&&d.replan.length)?d.replan[0].de:d.prazo;
+    return d.concl>prazoOriginal;
+  }).length;
+  const semData=DB.filter(d=>d.status==='Concluído'&&(!d.concl||!d.prazo)).length;
+  mkPont([[noPrazo],[comAtraso]],['Ações Concluídas']);
+  const summEl=document.getElementById('pont-summary');
+  if(summEl){
+    const total=conclItems.length+semData;
+    const pctPont=total?Math.round(noPrazo/total*100):0;
+    summEl.innerHTML=`
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#E8F7EF;border-radius:8px">
+          <div><div style="font-size:10px;font-weight:700;color:#1EB564;letter-spacing:.5px;text-transform:uppercase">✅ No prazo ou antes</div><div style="font-size:24px;font-weight:800;color:#1EB564">${noPrazo}</div></div>
+          <div style="font-size:28px;font-weight:800;color:#1EB564;opacity:.3">${pctPont}%</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#FDEBEB;border-radius:8px">
+          <div><div style="font-size:10px;font-weight:700;color:#D93535;letter-spacing:.5px;text-transform:uppercase">🔴 Com atraso</div><div style="font-size:24px;font-weight:800;color:#D93535">${comAtraso}</div></div>
+          <div style="font-size:28px;font-weight:800;color:#D93535;opacity:.3">${total?Math.round(comAtraso/total*100):0}%</div>
+        </div>
+        ${semData?`<div style="padding:8px 14px;background:#F0F4FA;border-radius:8px;font-size:11px;color:var(--muted)">⚠️ ${semData} concluída(s) sem data registrada</div>`:''}
+        <div style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-size:11px;color:var(--muted)">Total concluídas: <strong style="color:var(--navy)">${total}</strong></div>
+      </div>`;
+  }
+
+  const respMap={};
+  F.forEach(d=>{if(!respMap[d.resp])respMap[d.resp]={total:0,concl:0};respMap[d.resp].total++;if(d.status==='Concluído')respMap[d.resp].concl++;});
+  const ranked=Object.entries(respMap).sort((a,b)=>b[1].total-a[1].total);
+  const badges=['gold','silver','bronze'];
+  document.getElementById('ranking-tbody').innerHTML=ranked.map(([nm,v],i)=>`
+    <tr><td><div class="rank-badge ${badges[i]||''}">${i+1}</div></td>
+    <td style="font-weight:600">${nm}</td>
+    <td style="font-weight:700;color:var(--blue)">${v.total}</td>
+    <td><span class="sbadge ${v.concl>0?'concl':'and'}">${v.concl} ✓</span><div class="inline-bar" style="width:${Math.round(v.concl/(v.total||1)*50)}px;background:#1EB564"></div></td></tr>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER PENDENTES
+// ═══════════════════════════════════════════════════════
+function renderPendentes(){
+  let rows=applyFilters(DB).filter(d=>d.status!=='Concluído'&&d.status!=='Descontinuado');
+  rows=sorted(rows,'pend',[d=>d.id,d=>d.resp,d=>d.area,d=>d.crit,d=>d.prazo||'',d=>d.status]);
+  document.getElementById('pend-count').textContent=`${rows.length} registros`;
+  document.getElementById('pend-tbody').innerHTML=rows.map(d=>{
+    const atr=diasAtraso(d);
+    const rc=atr>0?'row-atr':'';
+    const atrasoCell=atr>0?`<span style="font-weight:700;color:#D93535;font-size:11px">+${atr}d</span>`:`<span style="color:#AAB8CC;font-size:11px">—</span>`;
+    const replan=d.replan&&d.replan.length?`<div style="margin-top:4px">${replanTag(d)}</div>`:'';
+    return`<tr class="${rc}">
+      <td style="text-align:center;font-size:16px">${farol(d)}</td>
+      <td style="font-weight:700;color:var(--blue)">#${d.id}</td>
+      <td style="font-size:11px">${d.resp}</td>
+      <td style="font-size:11px">${d.area}</td>
+      <td>${critBadge(d.crit)}</td>
+      <td style="max-width:220px;font-size:11px;line-height:1.4">${d.desc}</td>
+      <td style="max-width:240px">${acaoCell(d,'p')}</td>
+      <td style="white-space:nowrap;font-size:11px;font-weight:600;${atr>0?'color:#D93535':''}">${fmtDate(d.prazo)}${replan}</td>
+      <td>${statusBadge(d)}</td>
+      <td style="text-align:center">${atrasoCell}</td>
+      <td style="max-width:160px;font-size:10px;color:var(--muted)">${d.obs||'—'}</td>
+      <td>${actionBtns(d)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER CONCLUÍDOS
+// ═══════════════════════════════════════════════════════
+function renderConcluidos(){
+  const srch=(document.getElementById('search-concl')||{value:''}).value.toLowerCase();
+  let rows=applyFilters(DB).filter(d=>d.status==='Concluído');
+  if(srch) rows=rows.filter(d=>
+    d.desc.toLowerCase().includes(srch)||d.resp.toLowerCase().includes(srch)||
+    d.area.toLowerCase().includes(srch)||(d.acao||'').toLowerCase().includes(srch)
+  );
+  rows=sorted(rows,'concl',[d=>d.id,d=>d.resp,d=>d.area,d=>d.tipo,d=>d.crit,d=>d.prazo||'',d=>d.concl||'']);
+  const el=document.getElementById('concl-count');
+  if(el) el.textContent=`${rows.length} registros`;
+  const tbody=document.getElementById('concl-tbody');
+  if(!tbody) return;
+  tbody.innerHTML=rows.map(d=>{
+    // Pontualidade: compare concl vs prazo original (before replans)
+    const prazoOrig=(d.replan&&d.replan.length)?d.replan[0].de:d.prazo;
+    const onTime=d.concl&&prazoOrig&&d.concl<=prazoOrig;
+    const pont=d.concl
+      ? (onTime
+          ? `<span class="sbadge concl">✅ No prazo</span>`
+          : `<span class="sbadge atr">⚠️ Com atraso</span>`)
+      : `<span style="color:var(--muted);font-size:10px">—</span>`;
+    const replanBadge=(d.replan&&d.replan.length)?`<span class="replan-tag" style="margin-left:4px">↻ ${d.replan.length}x</span>`:'';
+    return`<tr>
+      <td style="text-align:center;font-size:16px">🟢</td>
+      <td style="font-weight:700;color:var(--blue)">#${d.id}</td>
+      <td style="font-size:11px">${d.resp}</td>
+      <td style="font-size:11px">${d.area}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.tipo}</td>
+      <td>${critBadge(d.crit)}</td>
+      <td style="max-width:230px;font-size:11px;line-height:1.4">${d.desc}</td>
+      <td style="white-space:nowrap;font-size:11px;font-weight:600">${fmtDate(d.prazo)}${replanBadge}</td>
+      <td style="white-space:nowrap;font-size:11px;font-weight:700;color:var(--green)">${fmtDate(d.concl)}</td>
+      <td>${pont}</td>
+      <td style="max-width:180px;font-size:10px;color:var(--muted)">${d.obs||'—'}</td>
+      <td>${actionBtns(d)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER TODOS
+// ═══════════════════════════════════════════════════════
+function renderTodos(){
+  const srch=(document.getElementById('search-input').value||'').toLowerCase();
+  let rows=applyFilters(DB).filter(d=>{
+    if(!srch)return true;
+    return d.desc.toLowerCase().includes(srch)||d.resp.toLowerCase().includes(srch)||d.area.toLowerCase().includes(srch)||d.tipo.toLowerCase().includes(srch)||(d.acao||'').toLowerCase().includes(srch);
+  });
+  rows=sorted(rows,'todos',[d=>d.id,d=>d.resp,d=>d.area,d=>d.tipo,d=>d.crit,d=>d.prazo||'',d=>d.status]);
+  document.getElementById('todos-count').textContent=`${rows.length} registros`;
+  document.getElementById('todos-tbody').innerHTML=rows.map(d=>{
+    const atr=diasAtraso(d);
+    const rc=d.status==='Descontinuado'?'row-disc':atr>0?'row-atr':'';
+    return`<tr class="${rc}">
+      <td style="text-align:center;font-size:16px">${farol(d)}</td>
+      <td style="font-weight:700;color:var(--blue)">#${d.id}</td>
+      <td style="font-size:11px">${d.resp}</td>
+      <td style="font-size:11px">${d.area}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.tipo}</td>
+      <td>${critBadge(d.crit)}</td>
+      <td style="max-width:210px;font-size:11px;line-height:1.4">${d.desc}</td>
+      <td style="max-width:240px">${acaoCell(d,'t')}</td>
+      <td style="white-space:nowrap;font-size:11px;font-weight:600;${atr>0?'color:#D93535':''}">
+        ${fmtDate(d.prazo)}${replanTag(d)}
+        ${d.concl?`<div style="font-size:10px;font-weight:700;color:var(--green);margin-top:2px">✅ ${fmtDate(d.concl)}</div>`:''}
+      </td>
+      <td>${statusBadge(d)}</td>
+      <td style="max-width:160px;font-size:10px;color:var(--muted)">${d.obs||'—'}</td>
+      <td>${actionBtns(d)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER ALL
+// ═══════════════════════════════════════════════════════
+function renderAll(){renderDashboard();renderPendentes();renderConcluidos();renderTodos();}
+
+// Bootstrap — connect to Firebase and load data
+loadFromDB();
+renderAll();
+</script>
+</body>
+</html>
