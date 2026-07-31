@@ -132,7 +132,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;ba
 .card-body{padding:12px 16px 14px;}
 
 /* KPI */
-.kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+.kpi-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;}
 .kpi-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 14px 12px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
 .kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;}
 .kpi-total::before{background:var(--blue);}.kpi-concl::before{background:var(--green);}
@@ -611,6 +611,12 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
     <button class="filter-pill" onclick="setFilter('resp','Log obras/Diego/Renata')">Log / Diego / Renata</button>
   </div>
   <div class="filter-section" style="margin-top:14px">
+    <div class="filter-label">⏳ Dependência</div>
+    <button class="filter-pill active" onclick="setFilter('dep','Todos')">Todos</button>
+    <button class="filter-pill" onclick="setFilter('dep','com')">Com dependência</button>
+    <button class="filter-pill" onclick="setFilter('dep','sem')">Sem dependência</button>
+  </div>
+  <div class="filter-section" style="margin-top:14px">
     <div class="filter-label">🔘 Status</div>
     <button class="filter-pill active" onclick="setFilter('status','Todos')">Todos</button>
     <button class="filter-pill" onclick="setFilter('status','Concluído')">✅ Concluído</button>
@@ -639,6 +645,7 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
     <button class="filter-pill" onclick="setFilter('crit','Média')">🟡 Média</button>
     <button class="filter-pill" onclick="setFilter('crit','Baixa')">🟢 Baixa</button>
   </div>
+
   <div class="sidebar-footer">Atualizado em 30/07/2026</div>
 </aside>
 
@@ -671,6 +678,7 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
         <div class="kpi-card kpi-naoinic"><div class="kpi-icon">⏳</div><div class="kpi-value" id="kpi-naoinic">—</div><div class="kpi-label">Não Iniciados</div><div class="kpi-sub" id="kpi-naoinic-pct"></div></div>
         <div class="kpi-card kpi-atr"><div class="kpi-icon">🔴</div><div class="kpi-value" id="kpi-atr">—</div><div class="kpi-label">Atrasados</div><div class="kpi-sub" id="kpi-atr-pct"></div></div>
         <div class="kpi-card kpi-pct"><div class="kpi-icon">📊</div><div class="kpi-value" id="kpi-pct">—</div><div class="kpi-label">% Conclusão</div><div class="kpi-sub">Meta: 50%</div></div>
+        <div class="kpi-card" onclick="drillDep()" style="border-top:3px solid #6C4DE8;position:relative;overflow:hidden;cursor:pointer" title="Clique para ver chamados com dependência"><div class="kpi-icon" style="background:#F0EEF8">⏳</div><div class="kpi-value" id="kpi-dep" style="color:#6C4DE8">—</div><div class="kpi-label">Em Dependência</div><div class="kpi-sub" id="kpi-dep-sub">aguardando ação externa</div></div>
       </div>
       <div class="row2">
         <div class="card">
@@ -1093,7 +1101,7 @@ function diasAtraso(d){
 // ═══════════════════════════════════════════════════════
 // FILTERS
 // ═══════════════════════════════════════════════════════
-const filters={resp:'Todos',status:'Todos',area:'Todos',crit:'Todos'};
+const filters={resp:'Todos',status:'Todos',area:'Todos',crit:'Todos',dep:'Todos'};
 const period={filtrarPor:'abertura',ano:'Todos',mes:'Todos'};
 
 function setPeriodFilter(){
@@ -1149,6 +1157,9 @@ function applyFilters(arr){
     if(filters.crit!=='Todos'&&d.crit!==filters.crit)return false;
     if(filters.status==='Atrasado'){if(diasAtraso(d)===0)return false;}
     else if(filters.status!=='Todos'&&d.status!==filters.status)return false;
+    if(filters.dep==='com'&&(!d.dep_tipo||d.dep_tipo===''))return false;
+    if(filters.dep==='sem'&&d.dep_tipo&&d.dep_tipo!=='')return false;
+    if(filters.dep!=='Todos'&&filters.dep!=='com'&&filters.dep!=='sem'&&d.dep_tipo!==filters.dep)return false;
     if(!applyPeriodFilter(d))return false;
     return true;
   });
@@ -1686,6 +1697,10 @@ function openDrill(title, items){
   }
   document.getElementById('modal-drill').classList.add('open');
 }
+function drillDep(){
+  var items = applyFilters(DB).filter(d=>d.dep_tipo&&d.dep_tipo!=='');
+  openDrill('Em Dependência — Aguardando Ação Externa', items);
+}
 function drillStatus(label, key){
   var F = applyFilters(DB);
   var items;
@@ -1851,6 +1866,7 @@ function renderDashboard(){
   const pct=n?Math.round(concl/n*100):0;
   const total=ALL.length;
 
+  const dep = F.filter(d=>d.dep_tipo&&d.dep_tipo!=='').length;
   document.getElementById('kpi-total').textContent=total;
   document.getElementById('kpi-total-sub').textContent='base completa';
   document.getElementById('kpi-concl').textContent=concl;
@@ -1858,6 +1874,8 @@ function renderDashboard(){
   document.getElementById('kpi-naoinic').textContent=naoinic;
   document.getElementById('kpi-atr').textContent=atr;
   document.getElementById('kpi-pct').textContent=pct+'%';
+  document.getElementById('kpi-dep').textContent=dep;
+  document.getElementById('kpi-dep-sub').textContent=dep?'tipo(s) de dependência ativa':'nenhuma dependência ativa';
   document.getElementById('kpi-concl-pct').textContent=n?Math.round(concl/n*100)+'% do total':'—';
   document.getElementById('kpi-and-pct').textContent=n?Math.round(andando/n*100)+'% do total':'—';
   document.getElementById('kpi-naoinic-pct').textContent=n?Math.round(naoinic/n*100)+'% do total':'—';
