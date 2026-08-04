@@ -363,9 +363,11 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
           <input class="form-input" id="f-resp" list="list-resp" placeholder="Nome do responsável" autocomplete="off"/>
           <datalist id="list-resp">
             <option value="Diego"/><option value="Otavio"/><option value="Diego/Renata"/>
-            <option value="Natalia"/><option value="Wellington "/>
             <option value="Log obras/Diego"/><option value="Log obras/Diego/Renata"/>
           </datalist>
+          <div style="margin-top:4px">
+            <button type="button" data-action="open-resps" style="background:none;border:none;color:var(--sky);font-size:10px;font-family:inherit;cursor:pointer;padding:0">⚙️ Gerenciar responsáveis</button>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Área <span class="req">*</span></label>
@@ -556,6 +558,27 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
   </div>
 </div>
 
+<!-- Modal: Gerenciar Responsáveis -->
+<div id="modal-resps" style="display:none;position:fixed;inset:0;background:rgba(15,39,68,.6);z-index:4500;align-items:center;justify-content:center;backdrop-filter:blur(2px)">
+  <div style="background:#fff;border-radius:16px;width:480px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.2)">
+    <div class="modal-header">
+      <span class="modal-title">👤 Gerenciar Responsáveis</span>
+      <button class="modal-close" data-action="close-resps">×</button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto;flex:1">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Adicione ou remova responsáveis. Aparecerão como sugestão no campo de nova ação.</p>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <input class="form-input" id="input-novo-resp" placeholder="Nome do responsável…" style="flex:1"/>
+        <button data-action="add-resp" style="background:var(--sky);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap">+ Adicionar</button>
+      </div>
+      <div id="resps-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="modal-footer">
+      <button data-action="close-resps" class="btn-primary" style="background:var(--navy)">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════════════════════════════════════════════ -->
 <div class="layout">
 <aside class="sidebar">
@@ -610,6 +633,7 @@ table.data-tbl td{padding:7px 8px;vertical-align:top;overflow:hidden;text-overfl
     <button class="filter-pill" onclick="setFilter('resp','Diego/Renata')">Diego / Renata</button>
     <button class="filter-pill" onclick="setFilter('resp','Log obras/Diego')">Log / Diego</button>
     <button class="filter-pill" onclick="setFilter('resp','Log obras/Diego/Renata')">Log / Diego / Renata</button>
+    <button data-action="open-resps" style="width:100%;background:transparent;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.6);border-radius:6px;padding:5px;font-size:10px;font-family:inherit;cursor:pointer;margin-top:6px">⚙️ Gerenciar responsáveis</button>
   </div>
   <div class="filter-section" style="margin-top:14px">
     <div class="filter-label">⏳ Dependência</div>
@@ -984,6 +1008,7 @@ const TODAY = new Date('2026-07-30');
 
 function nextId(){return DB.length?Math.max(...DB.map(d=>d.id||0))+1:1;}
 
+
 // ── Custom Areas ────────────────────────────────────────
 var BASE_AREAS = ['Manutenção','Portaria/Acesso','Contratos','Obras/Reforma','Restaurante','Segurança/Incêndio'];
 var _customAreas = [];
@@ -1293,6 +1318,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if(fa) fa.addEventListener('change', onAreaChange);
   const ina = document.getElementById('input-nova-area');
   if(ina) ina.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addArea(); } });
+
 });
 
 document.addEventListener('click',(e)=>{
@@ -1309,6 +1335,10 @@ document.addEventListener('click',(e)=>{
       if(el){ el.classList.toggle('expanded'); btn.textContent = el.classList.contains('expanded') ? 'ver menos' : 'ver mais'; }
     }
     if(action === 'nova-area')   salvarNovaArea();
+    if(action === 'open-resps')  openRespsModal();
+    if(action === 'close-resps') closeRespsModal();
+    if(action === 'add-resp')    addResp();
+    if(action === 'del-resp'){ var rr=btn.getAttribute('data-resp'); if(rr) delResp(rr); }
     if(action === 'open-areas')  openAreasModal();
     if(action === 'close-areas') closeAreasModal();
     if(action === 'add-area')    addArea();
@@ -1316,6 +1346,7 @@ document.addEventListener('click',(e)=>{
       var area = btn.getAttribute('data-area');
       if(area) delArea(area);
     }
+
     if(action === 'filter-area'){
       var area = btn.getAttribute('data-area');
       if(area) setFilter('area', area);
@@ -1389,6 +1420,7 @@ function openNew(){
 function openEdit(id){
   _editId=id;
   refreshAreaOptions(); // ensure custom areas are in select before setting value
+  refreshRespOptions(); // ensure custom resps are in select
   const d=DB.find(x=>x.id===id);
   dbg('>>> openEdit('+id+') _editId agora='+_editId+' | tipo='+typeof id+' | encontrado='+(!!d), '#FFD700');
   if(!d){ dbg('ERRO: id '+id+' não encontrado no DB!','#FF6B6B'); return; }
@@ -1653,6 +1685,64 @@ function confirmDel(){
   })();
 }
 
+// ── Responsáveis Manager ─────────────────────────────────────────────────
+var _baseResps = ['Diego','Otavio','Diego/Renata','Log obras/Diego','Log obras/Diego/Renata'];
+var _customResps = [];
+function _saveResps(){
+  try{ localStorage.setItem('pib_resps',JSON.stringify(_customResps)); }catch(e){}
+  if(typeof fbRoot!=='undefined') fbRoot.parent().child('custom_resps').set(_customResps).catch(()=>{});
+}
+function _loadResps(){
+  try{ var c=localStorage.getItem('pib_resps'); if(c) _customResps=JSON.parse(c); }catch(e){}
+  if(typeof fbRoot!=='undefined'){
+    fbRoot.parent().child('custom_resps').once('value').then(snap=>{
+      var v=snap.val();
+      if(v&&Array.isArray(v)){ _customResps=v; try{localStorage.setItem('pib_resps',JSON.stringify(v));}catch(e){} }
+      _refreshDatalist();
+    }).catch(()=>{});
+  }
+  _refreshDatalist();
+}
+function _allResps(){ return [..._baseResps,..._customResps]; }
+function _refreshDatalist(){
+  var dl=document.getElementById('list-resp'); if(!dl) return;
+  dl.innerHTML=_allResps().map(r=>'<option value="'+r+'"/>').join('');
+}
+function _renderRespsList(){
+  var el=document.getElementById('resps-list'); if(!el) return;
+  el.innerHTML=_allResps().map(r=>{
+    var isBase=_baseResps.includes(r);
+    return '<div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px">'+
+      '<span>'+r+(isBase?' <span style="font-size:9px;color:var(--muted)">(padrão)</span>':'')+'</span>'+
+      (!isBase?'<button data-action="del-resp" data-resp="'+r+'" style="background:none;border:none;color:#D93535;cursor:pointer;font-size:16px;line-height:1;padding:0 4px">×</button>':'<span></span>')+
+    '</div>';
+  }).join('');
+}
+function openRespsModal(){
+  _renderRespsList(); _refreshDatalist();
+  var m=document.getElementById('modal-resps'); if(m) m.style.display='flex';
+  window.setTimeout(()=>{ var i=document.getElementById('input-novo-resp'); if(i) i.focus(); },150);
+}
+function closeRespsModal(){
+  var m=document.getElementById('modal-resps'); if(m) m.style.display='none';
+  _refreshDatalist();
+}
+function addResp(){
+  var inp=document.getElementById('input-novo-resp'); if(!inp) return;
+  var novo=inp.value.trim();
+  if(!novo){ showToast('⚠️ Digite o nome','#D93535'); return; }
+  if(_allResps().map(r=>r.toLowerCase()).includes(novo.toLowerCase())){ showToast('⚠️ Já existe','#E8632A'); return; }
+  _customResps.push(novo); inp.value='';
+  _renderRespsList(); _refreshDatalist(); _saveResps();
+  showToast('✅ "'+novo+'" adicionado!','#1EB564');
+}
+function delResp(r){
+  _customResps=_customResps.filter(x=>x!==r);
+  _saveResps(); _renderRespsList(); _refreshDatalist();
+  showToast('"'+r+'" removido','#E8632A');
+}
+// ── END Responsáveis Manager ──────────────────────────────────────────────
+
 // ═══════════════════════════════════════════════════════
 // TOOLTIP + DRILL-DOWN
 // ═══════════════════════════════════════════════════════
@@ -1737,6 +1827,9 @@ function closeDrill(){
 }
 document.getElementById('modal-drill').addEventListener('click', function(e){
   if(e.target === this) closeDrill();
+});
+document.getElementById('modal-resps').addEventListener('click', function(e){
+  if(e.target === this) closeRespsModal();
 });
 
 // ═══════════════════════════════════════════════════════
@@ -2103,7 +2196,7 @@ function renderAll(){populateYears();refreshAreaFilters();renderDashboard();rend
 // Bootstrap — connect to Firebase and load data
 loadFromDB();
 loadCustomAreas();
-renderAll();
+_loadResps();
 </script>
 </body>
 </html>
